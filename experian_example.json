@@ -1,0 +1,91 @@
+{
+  "ELSGenericMessage": {
+    "InputData": {
+      "CLIENT_ID": "60018916-2ac3-4f33-955b-7e93458f4115",
+      "FIRST_NAME": "Elizabeth",
+      "LAST_NAME": "Pichardo-Burr",
+      "STREET1": "345 Prospect ave apt 2H",
+      "ZIP": "07601"
+    },
+    "Message": {
+      "CATEGORY": "",
+      "RESULT_CODE": "S100",
+      "TYPE": "STATUS",
+      "VALUE": ""
+    },
+    "Stage2Data": {
+      "Data_Type": "A",
+      "Livu": {
+        "ESTIMATED_CURRENT_HOME_VALUE": "0000000",
+        "LIV_HHINC": "L",
+        "MOSAIC_TYPE": "O54",
+        "MO_BUYER_CLOTHES_SHOES": "U"
+      },
+      "Match_Type": "I"
+    },
+    "StandardizedAddress": {
+      "ADDRESS_CODE": 1,
+      "ADDRESS_TYPE": "H",
+      "CARRIER_ROUTE": "C031",
+      "CHECKDIGIT": 9,
+      "CITY": "HACKENSACK",
+      "COUNTRY": "US",
+      "COUNTY": "BERGEN",
+      "COUNTY_CODE": "003",
+      "DPBC": 28,
+      "FIPSCODE": 34003,
+      "FIRMLINE": "",
+      "FULL_ADDRESS": "345 PROSPECT AVE APT 2H",
+      "GEOMATCH": 0,
+      "GEO_BLK": "0233021001",
+      "GEO_LAT": 40.894746,
+      "GEO_LNG": -74.052496,
+      "GEO_MSA": 35620,
+      "LACSCODE": "",
+      "MATCHZIPFIVE": "T",
+      "MATCHZIPNINE": "T",
+      "POSTDIR": "",
+      "PO_BOX_NUM": "",
+      "PREDIR": "",
+      "PRIM_NAME": "PROSPECT",
+      "PRIM_RANGE": 345,
+      "RR_BOX_NUM": "",
+      "RR_NUM": "",
+      "SEC_RANGE": "2H",
+      "STATE": "NJ",
+      "STREET1": "345 PROSPECT AVE",
+      "STREET2": "APT 2H",
+      "SUFFIX": "AVE",
+      "SUITABLEFORDELIVERY": "F",
+      "UNIT_DESIG": "APT",
+      "ZIP": "07601",
+      "ZIPPLUS": 2582,
+      "ZIPTYPE": ""
+    },
+    "TRANSACTION_ID": 91195822
+  },
+  "TimeTracker": [
+    "RESTServlet : 1429",
+    "*Build GenericMessage : 1",
+    "*spoof check  : not recorded",
+    "*LeadEvaluator : 1325",
+    "**CorrectAddress : 1",
+    "**ELSLeadCreateProcessor : 4",
+    "***ELSLeadCreate Stored Proc: CreateELSLead() : 1",
+    "**EmailProcessor : not recorded",
+    "**EnhancedInSourceProcessor : 1315",
+    "***Name Search : 731",
+    "****MongoNameSearch-corr_search_keys : 727",
+    "****NameSearcher-logicMatch : 3",
+    "***EnhancedInSourceAppend-Household  : 553",
+    "***EnhancedInSourceAppend-Person  : not recorded",
+    "***EnhancedInSourceAppend-ET  : not recorded",
+    "***EnhancedInSourceAppend-HHex  : not recorded",
+    "***EnhancedInSourceAppend-Zip  : 27",
+    "***EnhancedInSourceAppend-Cape  : not recorded",
+    "***EnhancedInSourceAppend-Geo  : not recorded",
+    "***EnhancedInSourceAppend-DOMConstruct : not recorded",
+    "*setOutputDom : 55",
+    "*parseOutputWithFormat : not recorded"
+  ]
+}
