@@ -12,6 +12,7 @@ kids_and_zip = """
                    GROUP BY user_id
                    ORDER BY user_id)
     SELECT u.id AS user_id,
+           u.email,
            u.state,
            CASE WHEN became_member_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_member,
            u.created_at,
@@ -24,7 +25,8 @@ kids_and_zip = """
            nkids.num_kids
     FROM users u
              JOIN spree_addresses a ON u.ship_address_id = a.id
-             JOIN nkids ON nkids.user_id = u.id;
+             JOIN nkids ON nkids.user_id = u.id
+    WHERE u.email NOT ILIKE '%@rocketsofawesome.com';
 """
 
 
@@ -42,7 +44,8 @@ avg_keep_rates = """
                              LEFT JOIN spree_variants v ON v.id = si.variant_id
                     WHERE b.state = 'final'  -- otherwise kept is meaningless
                       AND v.sku <> 'X001-K09-A'
-                      AND b.approved_at < (CURRENT_DATE - INTERVAL '2 weeks') :: date),
+                      AND b.approved_at < (CURRENT_DATE - INTERVAL '2 weeks') :: date
+                      AND o.email NOT ILIKE '%@rocketsofawesome.com'),
          by_box AS (SELECT user_id, box_id, (cast(sum(kept) AS float) / cast(count(sku) AS float)) AS keep_rate
                     FROM by_sku
                     GROUP BY user_id, box_id)
@@ -124,5 +127,4 @@ user_agents = """
     FROM javascript.users
     WHERE id ~ '^\d+$'
         AND context_user_agent IS NOT NULL;
-;
 """

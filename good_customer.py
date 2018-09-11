@@ -1,6 +1,7 @@
 import psycopg2
 import pandas as pd
 from sqlalchemy import create_engine
+from dateutil.relativedelta import relativedelta
 
 from query_dbs import kids_and_zip
 from query_dbs import avg_keep_rates
@@ -62,6 +63,32 @@ df.drop('zip', axis=1, inplace=True)
 
 df = pd.merge(df, mems_per_zip)
 
+# Cleanup
+two_weeks_ago = df['created_at'].max() - relativedelta(weeks=2)
+
+# remove new customers
+df = df.loc[df['created_at'] < two_weeks_ago, ]
+
+df['is_good_customer'].fillna(False, inplace=True)
+df.reset_index(drop=True, inplace=True)
+
+# remove recent boxes (within last two weeks)
+to_remove = df.loc[(df['avg_keep_rate'].isnull()) &
+                   (df['is_good_customer'] == True), ].index
+df.drop(to_remove, inplace=True)
+df.reset_index(drop=True, inplace=True)
+
+to_remove = df.loc[(df['is_member'] == False) &
+                   (df['state'] == 'subscription_member'), ].index
+df.drop(to_remove, inplace=True)
+df.reset_index(drop=True, inplace=True)
+
+to_remove = df.loc[(df['num_boxes'].isnull()) &
+                   (df['state'] == 'subscription_member'), 'user_id'].index
+df.drop(to_remove, inplace=True)
+df.reset_index(drop=True, inplace=True)
+
+
 # is_good = df['is_good_customer'].map(lambda x: x == True)
 # is_first_half_2018 = df['created_at'].map(
 #     lambda x: x >= pd.to_datetime('2018-01-01') and x <= pd.to_datetime('2018-06-02')
@@ -70,12 +97,12 @@ df = pd.merge(df, mems_per_zip)
 # census = pd.read_csv(
 #     "/Users/emmanuele/Data/census.csv", dtype={'zip': 'str'}, index_col=None)
 
-df.to_sql(
-    "good_customers",
-    localdb,
-    schema="members",
-    if_exists='replace',
-    index=False)
+# df.to_sql(
+#     "good_customers",
+#     localdb,
+#     schema="members",
+#     if_exists='replace',
+#     index=False)
 
 # Experian 2017 data. Not useful at the moment.
 # experian = """
