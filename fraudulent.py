@@ -1,10 +1,16 @@
+"""Model fraudulent $5 accounts
+
+Returns:
+    None -- Saves random forest to pickle file
+"""
+
 import psycopg2
 import argparse
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
 from ua_parser import user_agent_parser as up
-from query_dbs import user_agents
+from query_dbs import query_kid_preferences
 
 from matplotlib import pyplot as plt
 import seaborn as sns
@@ -13,19 +19,28 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import PolynomialFeatures
 from sklearn.utils import resample
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import learning_curve
+
+from sklearn.svm import SVC
 
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import roc_auc_score
 import scikitplot as skplt
+from sklearn.externals import joblib
 
-sns.set_style('whitegrid')
+from rfpimp import importances
+from rfpimp import plot_importances
+from rfpimp import plot_corr_heatmap
+
+# sns.set_style('whitegrid')
 
 slave = psycopg2.connect(service="rockets-slave")
-segment = psycopg2.connect(service='rockets-segment')
+# segment = psycopg2.connect(service='rockets-segment')
 localdb = create_engine(
     'postgresql://',
     echo=False,
@@ -42,6 +57,15 @@ parser.add_argument(
     '--upsample',
     help='train on a minority upsampled set',
     action='store_true')
+parser.add_argument(
+    '-m',
+    '--importances',
+    help='calculate and plot feature importances',
+    action='store_true')
+parser.add_argument(
+    '-s', '--svm', help='classify with SVM', action='store_true')
+parser.add_argument(
+    '-d', '--dumpfile', help='Save model to pkl file', action='store_true')
 
 args = parser.parse_args()
 
@@ -91,17 +115,16 @@ def plot_floating(data, var, quantile=None):
     plt.show()
 
 
-def cat_encode(X, Y, x, y):
+def cat_encode(X, x):
     Xcols = X.columns.tolist()
     categoricals = [
-        Xcols.index(col) for col in Xcols
+        Xcols.index(col)
+        for col in Xcols
         if X[col].dtypes in ['object', 'bool']
     ]
 
     Xcopy = X.copy()
-    Ycopy = Y.copy()
     xcopy = x.copy()
-    ycopy = y.copy()
 
     encoders = {}
     for col in Xcopy.columns:
@@ -110,8 +133,6 @@ def cat_encode(X, Y, x, y):
             encoders[col].fit(Xcopy[col].values)
             Xcopy[col] = encoders[col].transform(Xcopy[col])
     enc = OneHotEncoder(categorical_features=categoricals, sparse=False)
-    # enc.fit(X.as_matrix())
-    # Xenc = enc.transform(X)
     enc.fit(Xcopy)
     Xenc = enc.transform(Xcopy)
 
@@ -120,12 +141,21 @@ def cat_encode(X, Y, x, y):
             xcopy[col] = encoders[col].transform(xcopy[col])
     xenc = enc.transform(xcopy)
 
+    if args.dumpfile:
+        joblib.dump(encoders, 'lab_encs.pkl')
+        joblib.dump(enc, 'oh_enc.pkl')
+
     return Xenc, xenc
 
 
-
-def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
-                        n_jobs=1, train_sizes=np.linspace(.1, 1.0, 5)):
+def plot_learning_curve(estimator,
+                        title,
+                        X,
+                        y,
+                        ylim=None,
+                        cv=None,
+                        n_jobs=1,
+                        train_sizes=np.linspace(.1, 1.0, 5)):
     """
     Generate a simple plot of the test and training learning curve.
 
@@ -180,15 +210,26 @@ def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
     test_scores_std = np.std(test_scores, axis=1)
     plt.grid()
 
-    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
-                     train_scores_mean + train_scores_std, alpha=0.1,
-                     color="r")
-    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
-                     test_scores_mean + test_scores_std, alpha=0.1, color="g")
-    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",
-             label="Training score")
-    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",
-             label="Cross-validation score")
+    plt.fill_between(
+        train_sizes,
+        train_scores_mean - train_scores_std,
+        train_scores_mean + train_scores_std,
+        alpha=0.1,
+        color="r")
+    plt.fill_between(
+        train_sizes,
+        test_scores_mean - test_scores_std,
+        test_scores_mean + test_scores_std,
+        alpha=0.1,
+        color="g")
+    plt.plot(
+        train_sizes, train_scores_mean, 'o-', color="r", label="Training score")
+    plt.plot(
+        train_sizes,
+        test_scores_mean,
+        'o-',
+        color="g",
+        label="Cross-validation score")
 
     plt.legend(loc="best")
     return plt
@@ -201,6 +242,17 @@ try:
 except NameError:
     b = pd.read_sql_query(
         """
+        WITH nkids AS (
+            SELECT user_id,
+                            sum(
+                                CASE WHEN gender :: text = 'boys' :: text THEN 1 ELSE 0 END) AS  num_boys,
+                            sum(
+                                CASE WHEN gender :: text = 'girls' :: text THEN 1 ELSE 0 END) AS num_girls,
+                            count(*) AS                                                          num_kids
+                    FROM kid_profiles
+                    GROUP BY user_id
+                    ORDER BY user_id
+        )
         SELECT b.id               AS box_id,
             u.id               AS user_id,
             p.id AS kid_id,
@@ -221,18 +273,11 @@ except NameError:
                 JOIN kid_profiles p ON b.kid_profile_id = p.id
                 JOIN users u ON u.id = p.user_id
                 JOIN spree_addresses a ON u.ship_address_id = a.id
-                JOIN (SELECT user_id,
-                            sum(
-                                CASE WHEN gender :: text = 'boys' :: text THEN 1 ELSE 0 END) AS  num_boys,
-                            sum(
-                                CASE WHEN gender :: text = 'girls' :: text THEN 1 ELSE 0 END) AS num_girls,
-                            count(*) AS                                                          num_kids
-                    FROM kid_profiles
-                    GROUP BY user_id
-                    ORDER BY user_id) nkids ON nkids.user_id = u.id
-
+                JOIN nkids ON nkids.user_id = u.id
         WHERE b.state NOT IN ('new', 'new_invalid', 'canceled')
             AND service_fee_amount = 5
+            AND b.approved_at :: date < (current_date - interval '3 weeks') :: date
+            -- AND u.became_member_at > '2018-01-01'
             AND u.email NOT ILIKE '%@rocketsofawesome.com';
     """, slave)
 
@@ -242,10 +287,25 @@ except NameError:
         """
         SELECT zip,
             unemploym_rate_civil,
-            med_fam_income,
-            married_couples__density,
-            females_density
-        FROM members.census
+            med_hh_income,
+            married_couples_density,
+            females_density,
+            n_kids / area as kids_density,
+            households_density,
+            kids_school_perc,
+            kids_priv_school_perc,
+            smocapi_20,
+            smocapi_25,
+            smocapi_30,
+            smocapi_35,
+            smocapi_high,
+            grapi_15,
+            grapi_20,
+            grapi_25,
+            grapi_30,
+            grapi_35,
+            grapi_high
+        FROM dwh.census
     """, localdb)
 
     d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
@@ -253,9 +313,7 @@ except NameError:
 
     kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
 
-    kps = pd.read_sql_query(
-        "SELECT * FROM members.kid_preferences WHERE kid_id IN {profiles}"
-        .format(profiles=kids_list), localdb)
+    kps = query_kid_preferences(kids_list)
 
     kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
     kps['blacklist_count'] = kps.iloc[:, 11:25].notnull().sum(axis=1)
@@ -268,7 +326,6 @@ except NameError:
     kps['outfit_count'] = kps['outfit_count'].apply(lambda x: 1 if x > 0 else 0)
     kps['style_count'] = kps['style_count'].apply(lambda x: 1 if x > 0 else 0)
     kps['note_length'] = kps['note'].apply(lambda x: len(x) if x else 0)
-    # kps['note_count'] = kps['note'].apply(lambda x: 1 if pd.notnull(x) else 0)
     kps['swim_count'] = kps['swim'].apply(lambda x: 1 if pd.notnull(x) else 0)
     kps['neon_count'] = kps['neon'].apply(lambda x: 1 if pd.notnull(x) else 0)
     kps['text_on_clothes_count'] = kps['text_on_clothes'].apply(
@@ -325,52 +382,133 @@ except NameError:
 
     d = pd.merge(d, adds, how='left')
 
+    # uas = pd.read_sql_query(
+    #     """
+    #     SELECT id :: int as user_id,
+    #         context_user_agent
+    #     FROM javascript.users
+    #     WHERE id ~ '^\d+$'
+    #         AND context_user_agent IS NOT NULL
+    #         AND CAST(id AS INT) in {users};
+    # """.format(users=users_list), segment)
+
+    # d = pd.merge(d, uas, how='left')
+    # d['OS'] = d['context_user_agent'].apply(
+    #     lambda x: up.ParseOS(x)['family'] if pd.notnull(x) else None)
+    # d.loc[d['OS'] == 'Mac OS X', 'device'] = 'Mac'
+    # d.drop('context_user_agent', axis=1, inplace=True)
+
+# Why does user agent degrade the model?
 df = d.loc[:, [
-    'num_kids', 'days_to_convert', 'unemploym_rate_civil', 'med_fam_income',
-    'married_couples__density', 'females_density', 'n_preferences', 'cc_type',
-    'days_to_exp', 'diff_addresses', 'note_length', 'is_fraud'
+    'user_id', 'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
+    'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
+    'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids', 'num_girls',
+    'days_to_convert', 'unemploym_rate_civil', 'married_couples_density',
+    'n_preferences', 'cc_type', 'diff_addresses', 'days_to_exp', 'note_length',
+    'is_fraud'
 ]]
 
 imp = Imputer(strategy='median', axis=0, missing_values='NaN')
 
 for col in df[[
-        'unemploym_rate_civil', 'med_fam_income', 'married_couples__density',
-        'females_density'
+        'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
+        'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
+        'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids',
+        'days_to_convert', 'unemploym_rate_civil', 'married_couples_density'
 ]].columns:
     df[col] = imp.fit_transform((df[[col]]))
 
 df.dropna(inplace=True)
 
-train, test = train_test_split(df, test_size=0.2, random_state=42)
-X = train.drop('is_fraud', axis=1)
+tr_id, ts_id = train_test_split(
+    df['user_id'].unique(), test_size=0.2, random_state=2)
+train = df.loc[df['user_id'].isin(tr_id),]
+test = df.loc[df['user_id'].isin(ts_id),]
+
+# train, test = train_test_split(df, test_size=0.2, random_state=2)
+X = train.drop(['user_id', 'is_fraud'], axis=1)
 Y = train['is_fraud']
-x = test.drop('is_fraud', axis=1)
+x = test.drop(['user_id', 'is_fraud'], axis=1)
 y = test['is_fraud']
 
-rf = RandomForestClassifier()
-Xenc, xenc = cat_encode(X, Y, x, y)
+rf = RandomForestClassifier(n_jobs=-1)
+Xenc, xenc = cat_encode(X, x)
+
+poly = PolynomialFeatures(2)
+Xenc = poly.fit_transform(Xenc)
+xenc = poly.transform(xenc)
 
 if args.baseline:
     rf.fit(Xenc, Y)
     preds = rf.predict(Xenc)
     probs = rf.predict_proba(Xenc)
-    print(accuracy_score(Y, preds))
+    print('train accuracy score: {0:2f}'.format(accuracy_score(Y, preds)))
+
+    cv_preds = cross_val_predict(rf, Xenc, Y, cv=5)
+    print('train cv accuracy score: {0:2f}'.format(accuracy_score(Y, cv_preds)))
     # Keep only the positive class
     probs = [p[1] for p in probs]
-    print(roc_auc_score(Y, probs))
+    print('train roc score: {0:2f}'.format(roc_auc_score(Y, probs)))
 
     test_preds = rf.predict(xenc)
     test_probs = rf.predict_proba(xenc)
+    print('test accuracy score: {0:2f}'.format(accuracy_score(y, test_preds)))
 
-    # test_probs = [p[1] for p in test_probs]
+    test_probs_1 = [p[1] for p in test_probs]
+    print('test roc score: {0:2f}'.format(roc_auc_score(y, test_probs_1)))
+
     # predictions = cross_val_predict(rf, x, y)
 
     skplt.metrics.plot_confusion_matrix(y, test_preds, normalize=True)
+    skplt.metrics.plot_confusion_matrix(y, test_preds, normalize=False)
     skplt.metrics.plot_precision_recall(y, test_probs)
     skplt.metrics.plot_roc(y, test_probs)
     clf_names = ['Random Forest']
     skplt.metrics.plot_calibration_curve(y, [test_probs], clf_names)
     plot_learning_curve(rf, "Random Forest", Xenc, Y)
+
+if args.dumpfile:
+    joblib.dump(rf, "rf.pkl")
+    joblib.dump(poly, 'poly.pkl')
+
+if args.svm:
+    svm = SVC(
+        kernel='linear',
+        class_weight='balanced',  # penalize
+        probability=True)
+    svm.fit(Xenc, Y)
+    preds = svm.predict(Xenc)
+    probs = svm.predict_proba(Xenc)
+    print(accuracy_score(Y, preds))
+    # Keep only the positive class
+    probs = [p[1] for p in probs]
+    print(roc_auc_score(Y, probs))
+
+    test_preds = svm.predict(xenc)
+    test_probs = svm.predict_proba(xenc)
+
+    # test_probs = [p[1] for p in test_probs]
+    # predictions = cross_val_predict(svm, x, y)
+
+    skplt.metrics.plot_confusion_matrix(y, test_preds, normalize=True)
+    skplt.metrics.plot_precision_recall(y, test_probs)
+    skplt.metrics.plot_roc(y, test_probs)
+    clf_names = ['SVM']
+    skplt.metrics.plot_calibration_curve(y, [test_probs], clf_names)
+    plot_learning_curve(svm, "SVM", Xenc, Y)
+
+if args.importances:
+    Xnum = X.drop(['cc_type', 'diff_addresses'], axis=1)
+    xnum = x.drop(['cc_type', 'diff_addresses'], axis=1)
+    Xpoly = poly.fit_transform(Xnum)
+    xpoly = poly.transform(xnum)
+    Xpoly = pd.DataFrame(Xpoly, columns=poly.get_feature_names(Xnum.columns))
+    xpoly = pd.DataFrame(xpoly, columns=poly.get_feature_names(xnum.columns))
+    rf.fit(Xnum, Y)
+    # here we assume there are no categorical variables
+    imp = importances(rf, xnum, y)  # permutation
+    plot_importances(imp, figsize=(8, 12))
+    plot_corr_heatmap(Xnum, figsize=(11, 11))
 
 if args.randomgrid:
     # Number of trees in random forest
