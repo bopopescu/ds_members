@@ -9,9 +9,13 @@ from df2gspread import df2gspread as d2g
 from sklearn.preprocessing import Imputer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.externals import joblib
+from ua_parser import user_agent_parser as up
 
 pd.set_option('display.max_columns', 100)
 slave = psycopg2.connect(service="rockets-slave")
+segment = psycopg2.connect(service='rockets-segment')
+stitch = psycopg2.connect(service='rockets-stitch')
+
 localdb = create_engine(
     'postgresql://',
     echo=False,
@@ -50,7 +54,7 @@ b = pd.read_sql_query(
             JOIN spree_addresses a ON u.ship_address_id = a.id
             JOIN nkids ON nkids.user_id = u.id
 
-    WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'skipped')
+    WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'skipped', 'final')
         AND service_fee_amount = 5
         AND b.season_id = 9
         AND u.became_member_at IS NOT NULL
@@ -159,12 +163,44 @@ adds.drop(['ship_address_id', 'bill_address_id'], axis=1, inplace=True)
 
 d = pd.merge(d, adds, how='left')
 
+uas = pd.read_sql_query(
+    """
+    SELECT id :: int as user_id,
+        context_user_agent
+    FROM javascript.users
+    WHERE id ~ '^\d+$'
+        AND context_user_agent IS NOT NULL
+        AND CAST(id AS INT) in {users};
+""".format(users=users_list), segment)
+
+d = pd.merge(d, uas, how='left')
+d['OS'] = d['context_user_agent'].apply(
+    lambda x: up.ParseOS(x)['family'] if pd.notnull(x) else None)
+d.loc[d['OS'] == 'Mac OS X', 'OS'] = 'Mac'
+d.loc[d['OS'] == 'Linux', 'OS'] = 'Other'
+d.loc[d['OS'] == 'Chrome OS', 'OS'] = 'Other'
+d.drop('context_user_agent', axis=1, inplace=True)
+
+funding = pd.read_sql_query(
+    """
+    SELECT ev.data__object__metadata__quark_user_id :: INT AS user_id,
+        cc.funding
+    FROM stitch_stripe.stripe_customers__cards__data cc
+            JOIN stitch_stripe.stripe_events ev ON cc.customer = ev.data__object__customer
+    WHERE ev.data__object__metadata__quark_user_id IS NOT NULL;
+""", stitch)
+
+d = pd.merge(d, funding, how='left')
+d = d.loc[d['funding'] != 'unknown', :]
+d = d.loc[(d['funding'].notnull()) & (d['OS'].notnull()), ]
+
 df = d.loc[:, [
-    'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc', 'smocapi_20',
-    'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15', 'grapi_20',
-    'grapi_25', 'grapi_30', 'grapi_35', 'num_kids', 'num_girls',
-    'days_to_convert', 'unemploym_rate_civil', 'married_couples_density',
-    'n_preferences', 'cc_type', 'diff_addresses', 'days_to_exp', 'note_length'
+    'funding', 'OS', 'med_hh_income', 'kids_school_perc',
+    'kids_priv_school_perc', 'smocapi_20', 'smocapi_25', 'smocapi_30',
+    'smocapi_35', 'grapi_15', 'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35',
+    'num_kids', 'num_girls', 'days_to_convert', 'unemploym_rate_civil',
+    'married_couples_density', 'n_preferences', 'cc_type', 'diff_addresses',
+    'days_to_exp', 'note_length'
 ]]
 
 imp = Imputer(strategy='median', axis=0, missing_values='NaN')

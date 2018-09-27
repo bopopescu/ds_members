@@ -1,4 +1,4 @@
-"""Model fraudulent $5 accounts
+"""Model fraudulent $5 accounts.
 
 Returns:
     None -- Saves random forest to pickle file
@@ -37,10 +37,11 @@ from rfpimp import importances
 from rfpimp import plot_importances
 from rfpimp import plot_corr_heatmap
 
-# sns.set_style('whitegrid')
+sns.set_style('whitegrid')
 
 slave = psycopg2.connect(service="rockets-slave")
-# segment = psycopg2.connect(service='rockets-segment')
+segment = psycopg2.connect(service='rockets-segment')
+stitch = psycopg2.connect(service='rockets-stitch')
 localdb = create_engine(
     'postgresql://',
     echo=False,
@@ -277,7 +278,6 @@ except NameError:
         WHERE b.state NOT IN ('new', 'new_invalid', 'canceled')
             AND service_fee_amount = 5
             AND b.approved_at :: date < (current_date - interval '3 weeks') :: date
-            -- AND u.became_member_at > '2018-01-01'
             AND u.email NOT ILIKE '%@rocketsofawesome.com';
     """, slave)
 
@@ -382,30 +382,54 @@ except NameError:
 
     d = pd.merge(d, adds, how='left')
 
-    # uas = pd.read_sql_query(
-    #     """
-    #     SELECT id :: int as user_id,
-    #         context_user_agent
-    #     FROM javascript.users
-    #     WHERE id ~ '^\d+$'
-    #         AND context_user_agent IS NOT NULL
-    #         AND CAST(id AS INT) in {users};
-    # """.format(users=users_list), segment)
+    uas = pd.read_sql_query(
+        """
+        SELECT id :: int as user_id,
+            context_user_agent
+        FROM javascript.users
+        WHERE id ~ '^\d+$'
+            AND context_user_agent IS NOT NULL
+            AND CAST(id AS INT) in {users};
+    """.format(users=users_list), segment)
 
-    # d = pd.merge(d, uas, how='left')
-    # d['OS'] = d['context_user_agent'].apply(
-    #     lambda x: up.ParseOS(x)['family'] if pd.notnull(x) else None)
-    # d.loc[d['OS'] == 'Mac OS X', 'device'] = 'Mac'
-    # d.drop('context_user_agent', axis=1, inplace=True)
+    d = pd.merge(d, uas, how='left')
+    d['OS'] = d['context_user_agent'].apply(
+        lambda x: up.ParseOS(x)['family'] if pd.notnull(x) else None)
+    d.loc[d['OS'] == 'Mac OS X', 'OS'] = 'Mac'
+    d.loc[d['OS'] == 'Linux', 'OS'] = 'Other'
+    d.loc[d['OS'] == 'Chrome OS', 'OS'] = 'Other'
+    d.drop('context_user_agent', axis=1, inplace=True)
 
-# Why does user agent degrade the model?
+    funding = pd.read_sql_query("""
+        SELECT ev.data__object__metadata__quark_user_id :: INT AS user_id,
+            cc.funding
+        FROM stitch_stripe.stripe_customers__cards__data cc
+                JOIN stitch_stripe.stripe_events ev ON cc.customer = ev.data__object__customer
+        WHERE ev.data__object__metadata__quark_user_id IS NOT NULL;
+    """, stitch)
+
+    d = pd.merge(d, funding, how='left')
+    d = d.loc[d['funding'] != 'unknown', :]
+
+    # decls = pd.read_sql_query(
+    # """
+    #     SELECT count(*) as declines,
+    #         data__object__metadata__quark_user_id :: int as user_id
+    #     FROM stitch_stripe.stripe_events
+    #     WHERE data__object__metadata__quark_user_id IS NOT NULL
+    #         AND type = 'charge.failed'
+    #     GROUP BY 2;
+    # """, stitch)
+
+    # d = pd.merge(d, decls, how='left')
+
 df = d.loc[:, [
-    'user_id', 'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
-    'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
-    'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids', 'num_girls',
-    'days_to_convert', 'unemploym_rate_civil', 'married_couples_density',
-    'n_preferences', 'cc_type', 'diff_addresses', 'days_to_exp', 'note_length',
-    'is_fraud'
+    'user_id', 'funding', 'OS', 'med_hh_income', 'kids_school_perc',
+    'kids_priv_school_perc', 'smocapi_20', 'smocapi_25', 'smocapi_30',
+    'smocapi_35', 'grapi_15', 'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35',
+    'num_kids', 'num_girls', 'days_to_convert', 'unemploym_rate_civil',
+    'married_couples_density', 'n_preferences', 'cc_type', 'diff_addresses',
+    'days_to_exp', 'note_length', 'is_fraud'
 ]]
 
 imp = Imputer(strategy='median', axis=0, missing_values='NaN')
@@ -421,7 +445,7 @@ for col in df[[
 df.dropna(inplace=True)
 
 tr_id, ts_id = train_test_split(
-    df['user_id'].unique(), test_size=0.2, random_state=2)
+    df['user_id'].unique(), test_size=0.2, random_state=3)
 train = df.loc[df['user_id'].isin(tr_id),]
 test = df.loc[df['user_id'].isin(ts_id),]
 

@@ -25,6 +25,14 @@ localdb = create_engine(
     echo=False,
     pool_recycle=300,
     creator=lambda _: psycopg2.connect(service="rockets-local"))
+# stitch = psycopg2.connect(service="rockets-stitch")
+
+stitch = create_engine(
+    'postgresql://',
+    echo=True,
+    pool_recycle=300,
+    echo_pool=True,
+    creator=lambda _: psycopg2.connect(service='rockets-stitch'))
 
 # Load population file
 pop = pd.read_csv(
@@ -161,4 +169,18 @@ hh.columns = [
 hh.fillna(0, inplace=True)
 df = pd.merge(df, hh)
 
-df.to_sql("census", localdb, schema='dwh', if_exists='replace', index=False)
+df.to_sql(
+    "census",
+    localdb,
+    schema='dwh',
+    if_exists='replace',
+    index=False,
+    chunksize=1000)
+
+df.to_sql(
+    "census",
+    stitch,
+    schema='dw',
+    if_exists='replace',
+    index=False,
+    chunksize=1000)
