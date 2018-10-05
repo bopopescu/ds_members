@@ -86,8 +86,8 @@ c = pd.read_sql(
         grapi_30,
         grapi_35,
         grapi_high
-    FROM dwh.census
-""", localdb)
+    FROM dw.census
+""", stitch)
 
 d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
 d.drop(['zip'], axis=1, inplace=True)
@@ -163,15 +163,30 @@ adds.drop(['ship_address_id', 'bill_address_id'], axis=1, inplace=True)
 
 d = pd.merge(d, adds, how='left')
 
+# uas = pd.read_sql_query(
+#     """
+#     SELECT id :: int as user_id,
+#         context_user_agent
+#     FROM javascript.users
+#     WHERE id ~ '^\d+$'
+#         AND context_user_agent IS NOT NULL
+#         AND CAST(id AS INT) in {users};
+# """.format(users=users_list), segment)
+
 uas = pd.read_sql_query(
     """
-    SELECT id :: int as user_id,
-        context_user_agent
-    FROM javascript.users
-    WHERE id ~ '^\d+$'
-        AND context_user_agent IS NOT NULL
-        AND CAST(id AS INT) in {users};
-""".format(users=users_list), segment)
+    SELECT t.user_id :: INT,
+           t.context__user_agent AS context_user_agent
+    FROM (SELECT i.user_id,
+                i.context__user_agent,
+                row_number() OVER (PARTITION BY i.user_id ORDER BY i.timestamp) AS rn
+        FROM stitch_segment.identify i
+        WHERE i.user_id <> 'nobody@example.com'
+            AND i.user_id SIMILAR TO '[0-9]*'
+            AND i.anonymous_id IS NOT NULL
+            AND i.context__user_agent IS NOT NULL) t
+    WHERE t.rn = 1
+    """, stitch)
 
 d = pd.merge(d, uas, how='left')
 d['OS'] = d['context_user_agent'].apply(
