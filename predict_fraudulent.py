@@ -258,6 +258,6 @@ n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
 
 if n.shape[0] > t.shape[0]:
-    risky.to_sql(
-        "risky", localdb, schema='dwh', if_exists='append', index=False)
+    # risky.to_sql(
+    #     "risky", localdb, schema='dwh', if_exists='append', index=False)
     d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
