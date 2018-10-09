@@ -2,6 +2,7 @@ import psycopg2
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
+from oauth2client.service_account import ServiceAccountCredentials
 from df2gspread import gspread2df as g2d
 from df2gspread import df2gspread as d2g
 import yaml
@@ -241,7 +242,10 @@ risky['created_at'] = pd.Timestamp.now()
 s_id = '1AdUDx4-xDF9PvYCu-JpwTnkqs3wvWxrQ4GTdehGl-AU'
 wks_name = 'risky queue'
 
-t = g2d.download(s_id, wks_name, col_names=True, row_names=False)
+scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+credentials = ServiceAccountCredentials.from_json_keyfile_name('risky-users-e25b80bbf7bb.json', scope)
+
+t = g2d.download(s_id, wks_name, col_names=True, row_names=False, credentials=credentials)
 t['user_id'] = t['user_id'].astype('int')
 t['num_kids'] = t['num_kids'].astype('int')
 t['created_at'] = pd.to_datetime(t['created_at'])
@@ -253,7 +257,7 @@ n = n.reset_index().drop('index', axis=1)
 n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
 
-# if n.shape[0] > t.shape[0]:
-#     risky.to_sql(
-#         "risky", localdb, schema='dwh', if_exists='append', index=False)
-#     d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False)
+if n.shape[0] > t.shape[0]:
+    risky.to_sql(
+        "risky", localdb, schema='dwh', if_exists='append', index=False)
+    d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
