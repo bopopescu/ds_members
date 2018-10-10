@@ -1,3 +1,4 @@
+import argparse
 import psycopg2
 import pandas as pd
 import numpy as np
@@ -14,32 +15,68 @@ from ua_parser import user_agent_parser as up
 
 pd.set_option('display.max_columns', 100)
 
-with open('/home/ec2-user/Configs/Shoplets/config_prod.yaml') as c:
-    conf = yaml.load(c)['rockets-stitch']
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '-l',
+    '--local',
+    help='run the prediction locally, to test',
+    action='store_true')
 
-stitch = psycopg2.connect(dbname=conf['dbname'],
-    user=conf['user'],
-    password=conf['password'],
-    host=conf['dbhost'],
-    port=5432,
-    sslmode='require')
+args = parser.parse_args()
 
-b = pd.read_sql_query("""
+if args.local:
+    stitch = create_engine(
+        'postgresql://',
+        echo=True,
+        pool_recycle=300,
+        echo_pool=True,
+        creator=lambda _: psycopg2.connect(service='rockets-stitch'))
+
+else:
+    with open('/home/ec2-user/Configs/Shoplets/config_prod.yaml') as c:
+        conf = yaml.load(c)['rockets-stitch']
+
+    stitch = create_engine(
+        'postgresql://',
+        echo=True,
+        pool_recycle=300,
+        echo_pool=True,
+        creator=lambda _: psycopg2.connect(
+            dbname=conf['dbname'],
+            user=conf['user'],
+            password=conf['password'],
+            host=conf['dbhost'],
+            port=5432,
+            sslmode='require'
+            )
+    )
+
+    # stitch = psycopg2.connect(
+    #     dbname=conf['dbname'],
+    #     user=conf['user'],
+    #     password=conf['password'],
+    #     host=conf['dbhost'],
+    #     port=5432,
+    #     sslmode='require')
+
+b = pd.read_sql_query(
+    """
     SELECT box_id,
         b.user_id,
-        kid_profile_id AS kid_id,
-        b.state AS box_state,
-        u.state AS user_state,
+        b.shipping_window_id,
+        kid_profile_id                                                 AS kid_id,
+        b.state                                                        AS box_state,
+        u.state                                                        AS user_state,
         b.service_fee_amount,
         u.created_at,
         b.created_at                                                   AS box_created_at,
         date_part('day', u.became_member_at - u.created_at)            AS days_to_convert,
         u.became_member_at :: date,
-        u.zipcode,
+        left(u.zipcode, 5)                                             AS zipcode,
         b.approved_at,
-        u.num_boys,
-        u.num_girls,
-        u.num_kids,
+        u.num_boys :: INT,
+        u.num_girls :: INT,
+        u.num_kids :: INT,
         b.card_brand                                                   AS cc_type,
         (make_date(cast(b.card_exp_year AS int), cast(b.card_exp_month AS int),
                     1) + INTERVAL '1 month' - INTERVAL '1 day') :: date AS exp_date,
@@ -48,12 +85,14 @@ b = pd.read_sql_query("""
             ELSE FALSE END                                             AS diff_addresses
     FROM dw.fact_boxes b
             LEFT JOIN dw.dim_active_users u ON b.user_id = u.user_id
-    WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'skipped', 'final')
+            JOIN dw.dim_shipping_windows AS sw
+            ON (b.shipping_window_id = sw.shipping_window_id OR b.shipping_window_id = sw.next_shipping_window_id)
+    WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final')
     AND service_fee_amount = 5
     AND b.season_id = 10
     AND u.became_member_at IS NOT NULL
-    AND b.created_at :: date > (CURRENT_DATE - INTERVAL '2 days') :: date
-    AND u.email NOT ILIKE '%@rocketsofawesome.com';
+    AND sw.current_window = TRUE
+    AND u.email NOT ILIKE '%@rocketsofawesome.com'
 """, stitch)
 
 c = pd.read_sql(
@@ -86,12 +125,12 @@ d.drop(['zip'], axis=1, inplace=True)
 
 kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
 
-kps = pd.read_sql_query("""
+kps = pd.read_sql_query(
+    """
     SELECT *
     FROM dw.dim_kid_preferences
     WHERE kid_id IN {kids_list};
 """.format(kids_list=kids_list), stitch)
-
 
 kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
 kps['blacklist_count'] = kps.iloc[:, 11:25].notnull().sum(axis=1)
@@ -131,8 +170,8 @@ d = pd.merge(
 
 users_list = '(' + ', '.join([str(x) for x in b['user_id'].unique()]) + ')'
 
-d['days_to_exp'] = (
-    pd.to_datetime(d['exp_date']) - pd.to_datetime(d['became_member_at'])).dt.days
+d['days_to_exp'] = (pd.to_datetime(d['exp_date']) - pd.to_datetime(
+    d['became_member_at'])).dt.days
 
 adds = pd.read_sql_query(
     """
@@ -180,7 +219,7 @@ funding = pd.read_sql_query(
 
 d = pd.merge(d, funding, how='left')
 d = d.loc[d['funding'] != 'unknown', :]
-d = d.loc[(d['funding'].notnull()) & (d['OS'].notnull()), ]
+d = d.loc[(d['funding'].notnull()) & (d['OS'].notnull()),]
 
 df = d.loc[:, [
     'funding', 'OS', 'med_hh_income', 'kids_school_perc',
@@ -203,11 +242,20 @@ for col in df[[
 
 df.dropna(inplace=True)
 
-rf = joblib.load("/home/ec2-user/ds_members/rf.pkl")
-encoders = joblib.load("/home/ec2-user/ds_members/lab_encs.pkl")
-enc = joblib.load("/home/ec2-user/ds_members/oh_enc.pkl")
-poly = joblib.load("/home/ec2-user/ds_members/poly.pkl")
+if args.local:
+    rf = joblib.load("./rf.pkl")
+    encoders = joblib.load('./lab_encs.pkl')
+    enc = joblib.load('./oh_enc.pkl')
+    poly = joblib.load('./poly.pkl')
+else:
+    rf = joblib.load("/home/ec2-user/ds_members/rf.pkl")
+    encoders = joblib.load("/home/ec2-user/ds_members/lab_encs.pkl")
+    enc = joblib.load("/home/ec2-user/ds_members/oh_enc.pkl")
+    poly = joblib.load("/home/ec2-user/ds_members/poly.pkl")
+
 xcopy = df.copy()
+xcopy.loc[xcopy['OS'].isin(['iOS', 'Windows', 'Android', 'Mac', 'Other']) ==
+          False, 'OS'] = 'Other'
 for col in xcopy.columns:
     if xcopy[col].dtypes in ['object', 'bool']:
         xcopy[col] = encoders[col].transform(xcopy[col])
@@ -219,8 +267,8 @@ probs = rf.predict_proba(xenc)
 d['probs'] = [p[1] for p in probs]
 d.sort_values(by='probs', ascending=False, inplace=True)
 
-risky = d.loc[d['probs'] >= 0.35, ['user_id', 'num_kids', 'zipcode'
-                                 ]].drop_duplicates()
+risky = d.loc[d['probs'] >= 0.35, ['user_id', 'num_kids', 'zipcode', 'probs'
+                                  ]].drop_duplicates()
 
 
 def admin_link(user_id):
@@ -242,12 +290,17 @@ risky['created_at'] = pd.Timestamp.now()
 s_id = '1AdUDx4-xDF9PvYCu-JpwTnkqs3wvWxrQ4GTdehGl-AU'
 wks_name = 'risky queue'
 
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_name('risky-users-e25b80bbf7bb.json', scope)
+scope = [
+    'https://spreadsheets.google.com/feeds',
+    'https://www.googleapis.com/auth/drive'
+]
+credentials = ServiceAccountCredentials.from_json_keyfile_name(
+    'risky-users-e25b80bbf7bb.json', scope)
 
-t = g2d.download(s_id, wks_name, col_names=True, row_names=False, credentials=credentials)
+t = g2d.download(
+    s_id, wks_name, col_names=True, row_names=False, credentials=credentials)
 t['user_id'] = t['user_id'].astype('int')
-t['num_kids'] = t['num_kids'].astype('int')
+t['num_kids'] = t['num_kids'].astype('float').astype('int')
 t['created_at'] = pd.to_datetime(t['created_at'])
 
 risky = risky.loc[(risky['user_id'].isin(set(t['user_id'].unique()))) == False,]
@@ -258,6 +311,5 @@ n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
 
 if n.shape[0] > t.shape[0]:
-    # risky.to_sql(
-    #     "risky", localdb, schema='dwh', if_exists='append', index=False)
-    d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
+    n.to_sql("pred_risky", stitch, schema='dw', if_exists='append', index=False)
+#     d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
