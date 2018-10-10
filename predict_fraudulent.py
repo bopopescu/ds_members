@@ -36,28 +36,20 @@ else:
     with open('/home/ec2-user/Configs/Shoplets/config_prod.yaml') as c:
         conf = yaml.load(c)['rockets-stitch']
 
+    conn = psycopg2.connect(
+        dbname=conf['dbname'],
+        user=conf['user'],
+        password=conf['password'],
+        host=conf['dbhost'],
+        port=5432,
+        sslmode='require')
+
     stitch = create_engine(
         'postgresql://',
         echo=True,
         pool_recycle=300,
         echo_pool=True,
-        creator=lambda _: psycopg2.connect(
-            dbname=conf['dbname'],
-            user=conf['user'],
-            password=conf['password'],
-            host=conf['dbhost'],
-            port=5432,
-            sslmode='require'
-            )
-    )
-
-    # stitch = psycopg2.connect(
-    #     dbname=conf['dbname'],
-    #     user=conf['user'],
-    #     password=conf['password'],
-    #     host=conf['dbhost'],
-    #     port=5432,
-    #     sslmode='require')
+        creator=lambda _: conn)
 
 b = pd.read_sql_query(
     """
