@@ -259,8 +259,12 @@ probs = rf.predict_proba(xenc)
 d['probs'] = [p[1] for p in probs]
 d.sort_values(by='probs', ascending=False, inplace=True)
 
-risky = d.loc[d['probs'] >= 0.35, ['user_id', 'num_kids', 'zipcode', 'probs'
-                                  ]].drop_duplicates()
+risky = d.loc[d['probs'] >= 0.35, [
+    'user_id',
+    'num_kids',
+    'zipcode',
+    'probs'
+]].drop_duplicates()
 
 
 def admin_link(user_id):
@@ -302,6 +306,13 @@ n = n.reset_index().drop('index', axis=1)
 n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
 
-if n.shape[0] > t.shape[0]:
+if n.shape[0] > t.shape[0] and args.local == False:
     n.to_sql("pred_risky", stitch, schema='dw', if_exists='append', index=False)
-    d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
+    d2g.upload(
+        n,
+        s_id,
+        wks_name,
+        clean=False,
+        col_names=True,
+        row_names=False,
+        credentials=credentials)
