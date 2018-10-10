@@ -27,7 +27,7 @@ args = parser.parse_args()
 if args.local:
     stitch = create_engine(
         'postgresql://',
-        echo=True,
+        echo=False,
         pool_recycle=300,
         echo_pool=True,
         creator=lambda _: psycopg2.connect(service='rockets-stitch'))
@@ -46,7 +46,7 @@ else:
 
     stitch = create_engine(
         'postgresql://',
-        echo=True,
+        echo=False,
         pool_recycle=300,
         echo_pool=True,
         creator=lambda _: conn)
@@ -84,7 +84,7 @@ b = pd.read_sql_query(
     AND b.season_id = 10
     AND u.became_member_at IS NOT NULL
     AND sw.current_window = TRUE
-    AND u.email NOT ILIKE '%@rocketsofawesome.com'
+    AND u.email NOT ILIKE '%%@rocketsofawesome.com'
 """, stitch)
 
 c = pd.read_sql(
@@ -304,4 +304,4 @@ n['Notes'].replace('None', '', inplace=True)
 
 if n.shape[0] > t.shape[0]:
     n.to_sql("pred_risky", stitch, schema='dw', if_exists='append', index=False)
-#     d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
+    d2g.upload(n, s_id, wks_name, clean=False, col_names=True, row_names=False, credentials=credentials)
