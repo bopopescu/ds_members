@@ -109,7 +109,7 @@ c = pd.read_sql(
         grapi_30,
         grapi_35,
         grapi_high
-    FROM dw.census
+    FROM dw.dim_census
 """, stitch)
 
 d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
