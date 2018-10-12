@@ -76,7 +76,7 @@ b = pd.read_sql_query(
             WHEN u.ship_address_id <> u.bill_address_id THEN TRUE
             ELSE FALSE END                                             AS diff_addresses
     FROM dw.fact_boxes b
-            LEFT JOIN dw.dim_active_users u ON b.user_id = u.user_id
+            LEFT JOIN dw.fact_active_users u ON b.user_id = u.user_id
             JOIN dw.dim_shipping_windows AS sw
             ON (b.shipping_window_id = sw.shipping_window_id OR b.shipping_window_id = sw.next_shipping_window_id)
     WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final')
@@ -171,7 +171,7 @@ adds = pd.read_sql_query(
         CASE
             WHEN ship_address_id <> bill_address_id THEN TRUE
             ELSE FALSE END AS diff_addresses
-    FROM dw.dim_active_users
+    FROM dw.fact_active_users
     WHERE user_id IN {users}
 """.format(users=users_list), stitch)
 
