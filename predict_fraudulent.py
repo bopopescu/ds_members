@@ -81,7 +81,6 @@ b = pd.read_sql_query(
     AND service_fee_amount = 5
     AND b.season_id = 10
     AND u.became_member_at IS NOT NULL
-    AND sw.current_window = TRUE
     AND b.shipping_window_id IN (SELECT current_shipping_window_id
                                 FROM dw.dim_shipping_windows
                                 WHERE current_window
