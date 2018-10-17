@@ -77,13 +77,17 @@ b = pd.read_sql_query(
             ELSE FALSE END                                             AS diff_addresses
     FROM dw.fact_boxes b
             LEFT JOIN dw.fact_active_users u ON b.user_id = u.user_id
-            JOIN dw.dim_shipping_windows AS sw
-            ON (b.shipping_window_id = sw.shipping_window_id OR b.shipping_window_id = sw.next_shipping_window_id)
     WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final')
     AND service_fee_amount = 5
     AND b.season_id = 10
     AND u.became_member_at IS NOT NULL
     AND sw.current_window = TRUE
+    AND b.shipping_window_id IN (SELECT current_shipping_window_id
+                                FROM dw.dim_shipping_windows
+                                WHERE current_window
+                                UNION (SELECT next_shipping_window_id
+                                    FROM dw.dim_shipping_windows
+                                    WHERE current_window))
     AND u.email NOT ILIKE '%%@rocketsofawesome.com'
 """, stitch)
 
