@@ -78,7 +78,7 @@ b = pd.read_sql_query(
     FROM dw.fact_boxes b
             LEFT JOIN dw.fact_active_users u ON b.user_id = u.user_id
     WHERE b.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final')
-    AND service_fee_amount = 5
+    -- AND service_fee_amount = 5
     AND b.season_id = 10
     AND u.became_member_at IS NOT NULL
     AND b.shipping_window_id IN (SELECT current_shipping_window_id
@@ -262,7 +262,7 @@ probs = rf.predict_proba(xenc)
 d['probs'] = [p[1] for p in probs]
 d.sort_values(by='probs', ascending=False, inplace=True)
 
-risky = d.loc[d['probs'] >= 0.35, [
+risky = d.loc[d['probs'] >= 0.4, [
     'user_id',
     'num_kids',
     'zipcode',

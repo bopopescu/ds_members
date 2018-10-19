@@ -2,6 +2,7 @@
 
 Returns:
     None -- Saves random forest to pickle file
+
 """
 
 import psycopg2
@@ -39,14 +40,12 @@ from rfpimp import plot_corr_heatmap
 
 sns.set_style('whitegrid')
 
-slave = psycopg2.connect(service="rockets-slave")
-segment = psycopg2.connect(service='rockets-segment')
-stitch = psycopg2.connect(service='rockets-stitch')
-localdb = create_engine(
+stitch = create_engine(
     'postgresql://',
     echo=False,
     pool_recycle=300,
-    creator=lambda _: psycopg2.connect(service="rockets-local"))
+    echo_pool=True,
+    creator=lambda _: psycopg2.connect(service='rockets-stitch'))
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -241,56 +240,54 @@ try:
     print("Found")
 
 except NameError:
-    b = pd.read_sql_query(
-        """
-        WITH nkids AS (
-            SELECT user_id,
-                            sum(
-                                CASE WHEN gender :: text = 'boys' :: text THEN 1 ELSE 0 END) AS  num_boys,
-                            sum(
-                                CASE WHEN gender :: text = 'girls' :: text THEN 1 ELSE 0 END) AS num_girls,
-                            count(*) AS                                                          num_kids
-                    FROM kid_profiles
-                    GROUP BY user_id
-                    ORDER BY user_id
-        )
-        SELECT b.id               AS box_id,
-            u.id               AS user_id,
-            p.id AS kid_id,
-            b.state AS box_state,
+
+    b = pd.read_sql_query("""
+        SELECT b.box_id,
+            b.user_id,
+            b.kid_profile_id AS kid_id,
+            b.state                                                               AS box_state,
             CASE
                 WHEN b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed') THEN TRUE
-                ELSE FALSE END AS is_fraud,
-            u.state AS user_state,
+                ELSE FALSE END                                                    AS is_fraud,
+            -- u.state                                                               AS user_state,
             service_fee_amount,
-            u.created_at,
-            u.became_member_at,
-            a.zipcode,
-            b.approved_at,
-            nkids.num_boys,
-            nkids.num_girls,
-            nkids.num_kids
-        FROM boxes b
-                JOIN kid_profiles p ON b.kid_profile_id = p.id
-                JOIN users u ON u.id = p.user_id
-                JOIN spree_addresses a ON u.ship_address_id = a.id
-                JOIN nkids ON nkids.user_id = u.id
-        WHERE b.state NOT IN ('new', 'new_invalid', 'canceled')
-            AND service_fee_amount = 5
-            AND b.approved_at :: date < (current_date - interval '3 weeks') :: date
-            AND u.email NOT ILIKE '%@rocketsofawesome.com';
-    """, slave)
+            u.service_fee_enabled,
+            left(a.zipcode, 5)                                                    AS zipcode,
+            became_member_at,
+            u.num_boys,
+            u.num_girls,
+            u.num_kids,
+            CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
+            ch.channel,
+            date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert
 
-    b['days_to_convert'] = (b['became_member_at'] - b['created_at']).dt.days
+        FROM dw.fact_boxes b
+                JOIN dw.fact_active_users u ON u.user_id = b.user_id
+                JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
+                LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = b.user_id
+        WHERE b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed', 'final')
+        AND season_id BETWEEN 7 AND 9
+        AND became_member_at >= '2018-01-01'
+        AND service_fee_amount = 5
+        AND u.email NOT ILIKE '%%@rocketsofawesome.com'
+    """, stitch)
 
-    c = pd.read_sql(
-        """
-        SELECT zip,
+    u = pd.read_sql_query("""
+        SELECT DISTINCT 
+            bc.user_id,
+            bc.state,
+            ch.channel,
+            u.num_boys,
+            u.num_girls,
+            u.num_kids,
+            u.service_fee_enabled,
+            CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
+            date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert,
             unemploym_rate_civil,
             med_hh_income,
             married_couples_density,
             females_density,
-            n_kids / area as kids_density,
+            n_kids / area                                                         AS kids_density,
             households_density,
             kids_school_perc,
             kids_priv_school_perc,
@@ -304,93 +301,132 @@ except NameError:
             grapi_25,
             grapi_30,
             grapi_35,
-            grapi_high
-        FROM dwh.census
-    """, localdb)
+            grapi_high,
+            CASE WHEN bc.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed') THEN TRUE ELSE FALSE END AS is_fraud
 
-    d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
-    d.drop(['zip'], axis=1, inplace=True)
+        FROM dw.fact_user_box_count bc
+                LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = bc.user_id
+                JOIN dw.fact_active_users u ON bc.user_id = u.user_id
+                JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
+                JOIN dw.dim_census c ON left(a.zipcode, 5) = c.zip
+        WHERE season_id BETWEEN 7 AND 9
+            AND user_box_rank = 1
+            AND bc.state NOT IN ('needs_review', 'new', 'shipped', 'needs_review', 'canceled', 'skipped')
+            AND u.email NOT ILIKE '%%@rocketsofawesome.com'
+    """, stitch)
 
-    kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
+    # Cleanup of multiple entries
+    u_counts = u.groupby('user_id')['user_id'].count().sort_values(ascending=False)
+    idx = u_counts[u_counts==2].index
+    mult_u = u.loc[u['user_id'].isin(idx), ]
+    single_u = u.loc[u['user_id'].isin(idx) == False, ]
+    single_u.drop('state', axis=1, inplace=True)
 
-    kps = query_kid_preferences(kids_list)
+    fraud_or_not = mult_u.groupby('user_id')['is_fraud'].sum()
+    frauds = fraud_or_not[fraud_or_not>0].index
+    not_frauds = fraud_or_not[fraud_or_not==0].index
+    mult_u.drop(['state', 'is_fraud'], axis=1, inplace=True)
+    mult_u.drop_duplicates(inplace=True)
+    mult_u['is_fraud'] = False
+    mult_u.loc[mult_u['user_id'].isin(frauds), 'is_fraud'] = True
+    users = pd.concat([single_u, mult_u], axis=0)
 
-    kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
-    kps['blacklist_count'] = kps.iloc[:, 11:25].notnull().sum(axis=1)
-    kps['outfit_count'] = kps.iloc[:, 25:54].notnull().sum(axis=1)
-    kps['style_count'] = kps.iloc[:, 57:66].notnull().sum(axis=1)
 
-    kps['color_count'] = kps['color_count'].apply(lambda x: 1 if x > 0 else 0)
-    kps['blacklist_count'] = kps['blacklist_count'].apply(
-        lambda x: 1 if x > 0 else 0)
-    kps['outfit_count'] = kps['outfit_count'].apply(lambda x: 1 if x > 0 else 0)
-    kps['style_count'] = kps['style_count'].apply(lambda x: 1 if x > 0 else 0)
-    kps['note_length'] = kps['note'].apply(lambda x: len(x) if x else 0)
-    kps['swim_count'] = kps['swim'].apply(lambda x: 1 if pd.notnull(x) else 0)
-    kps['neon_count'] = kps['neon'].apply(lambda x: 1 if pd.notnull(x) else 0)
-    kps['text_on_clothes_count'] = kps['text_on_clothes'].apply(
-        lambda x: 1 if pd.notnull(x) else 0)
-    kps['backpack_count'] = kps['backpack'].apply(
-        lambda x: 1 if pd.notnull(x) else 0)
-    kps['teams_count'] = kps['teams'].apply(lambda x: 1 if pd.notnull(x) else 0)
+    # d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
+    # d.drop(['zip'], axis=1, inplace=True)
 
-    kps['n_preferences'] = kps.loc[:, [
-        'color_count', 'blacklist_count', 'outfit_count', 'style_count',
-        'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
-        'teams_count'
-    ]].sum(axis=1)
+    # kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
 
-    kps.drop([
-        'color_count', 'blacklist_count', 'outfit_count', 'style_count',
-        'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
-        'teams_count'
-    ],
-             axis=1,
-             inplace=True)
+    # kps = query_kid_preferences(kids_list)
 
-    d = pd.merge(
-        d, kps.loc[:, ['kid_id', 'note_length', 'n_preferences']], how='left')
+    # kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
+    # kps['blacklist_count'] = kps.iloc[:, 11:25].notnull().sum(axis=1)
+    # kps['outfit_count'] = kps.iloc[:, 25:54].notnull().sum(axis=1)
+    # kps['style_count'] = kps.iloc[:, 57:66].notnull().sum(axis=1)
 
-    users_list = '(' + ', '.join([str(x) for x in b['user_id'].unique()]) + ')'
+    # kps['color_count'] = kps['color_count'].apply(lambda x: 1 if x > 0 else 0)
+    # kps['blacklist_count'] = kps['blacklist_count'].apply(
+    #     lambda x: 1 if x > 0 else 0)
+    # kps['outfit_count'] = kps['outfit_count'].apply(lambda x: 1 if x > 0 else 0)
+    # kps['style_count'] = kps['style_count'].apply(lambda x: 1 if x > 0 else 0)
+    # kps['note_length'] = kps['note'].apply(lambda x: len(x) if x else 0)
+    # kps['swim_count'] = kps['swim'].apply(lambda x: 1 if pd.notnull(x) else 0)
+    # kps['neon_count'] = kps['neon'].apply(lambda x: 1 if pd.notnull(x) else 0)
+    # kps['text_on_clothes_count'] = kps['text_on_clothes'].apply(
+    #     lambda x: 1 if pd.notnull(x) else 0)
+    # kps['backpack_count'] = kps['backpack'].apply(
+    #     lambda x: 1 if pd.notnull(x) else 0)
+    # kps['teams_count'] = kps['teams'].apply(lambda x: 1 if pd.notnull(x) else 0)
 
-    cc = pd.read_sql_query(
-        """
-        SELECT user_id,
+    # kps['n_preferences'] = kps.loc[:, [
+    #     'color_count', 'blacklist_count', 'outfit_count', 'style_count',
+    #     'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
+    #     'teams_count'
+    # ]].sum(axis=1)
+
+    # kps.drop([
+    #     'color_count', 'blacklist_count', 'outfit_count', 'style_count',
+    #     'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
+    #     'teams_count'
+    # ],
+    #          axis=1,
+    #          inplace=True)
+
+    # d = pd.merge(
+    #     d, kps.loc[:, ['kid_id', 'note_length', 'n_preferences']], how='left')
+
+    users_list = '(' + ', '.join([str(x) for x in users['user_id'].unique()]) + ')'
+
+    # cc = pd.read_sql_query(
+    #     """
+    #     SELECT user_id :: BIGINT,
+    #         cc_type,
+    #         (make_date(cast(year as int), cast(month as int), 1) 
+    #             + interval '1 month' - interval '1 day') :: DATE AS exp_date
+    #     FROM stitch_quark.spree_credit_cards
+    #     WHERE "default" = TRUE
+    #         AND user_id :: BIGINT IN {users}
+    # """.format(users=users_list), stitch)
+
+    cc = pd.read_sql_query("""
+        SELECT u.user_id,
+            u.became_member_at,
             cc_type,
-            (make_date(cast(year as int), cast(month as int), 1) 
-                + interval '1 month' - interval '1 day') :: date AS exp_date
-        FROM spree_credit_cards
+            (make_date(cast(year AS int), cast(month AS int), 1)
+                    + INTERVAL '1 month' - INTERVAL '1 day') :: DATE AS exp_date,
+            ((make_date(cast(year AS int), cast(month AS int), 1)
+                                        + INTERVAL '1 month' - INTERVAL '1 day') :: DATE - u.became_member_at :: date) / 30
+        FROM stitch_quark.spree_credit_cards cc
+                JOIN dw.fact_active_users u ON cc.user_id :: BIGINT = u.user_id
         WHERE "default" = TRUE
-            AND user_id IN {users}
-    """.format(users=users_list), slave)
+            AND user_id :: BIGINT IN {users}
+    """.format(users=users_list), stitch)
 
-    d = pd.merge(d, cc, how='left')
-    d['days_to_exp'] = (
-        pd.to_datetime(d['exp_date']) - d['became_member_at']).dt.days
 
-    adds = pd.read_sql_query(
-        """
-        SELECT id as user_id,
-            ship_address_id,
-            bill_address_id
-        FROM users
-        WHERE id IN {users}
-    """.format(users=users_list), slave)
-    adds['diff_addresses'] = (
-        adds['ship_address_id'] - adds['bill_address_id']).map(lambda x: x > 0)
-    adds.drop(['ship_address_id', 'bill_address_id'], axis=1, inplace=True)
 
-    d = pd.merge(d, adds, how='left')
 
-    uas = pd.read_sql_query(
-        """
-        SELECT id :: int as user_id,
+    d = pd.merge(users, cc)
+
+    # d = pd.merge(d, cc, how='left')
+    # d['days_to_exp'] = (
+    #     pd.to_datetime(d['exp_date']).dt.tz_localize('UTC') - d['became_member_at']).dt.days
+
+    # uas = pd.read_sql_query(
+    #     """
+    #     SELECT id :: int as user_id,
+    #         context_user_agent
+    #     FROM javascript.users
+    #     WHERE id ~ '^\d+$'
+    #         AND context_user_agent IS NOT NULL
+    #         AND CAST(id AS INT) in {users};
+    # """.format(users=users_list), segment)
+
+    uas = pd.read_sql_query("""
+        SELECT user_id,
             context_user_agent
-        FROM javascript.users
-        WHERE id ~ '^\d+$'
-            AND context_user_agent IS NOT NULL
-            AND CAST(id AS INT) in {users};
-    """.format(users=users_list), segment)
+        FROM dw.fact_first_click_first_pass
+        WHERE user_id in {users}
+    """.format(users=users_list), stitch)
 
     d = pd.merge(d, uas, how='left')
     d['OS'] = d['context_user_agent'].apply(
@@ -398,15 +434,16 @@ except NameError:
     d.loc[d['OS'] == 'Mac OS X', 'OS'] = 'Mac'
     d.loc[d['OS'] == 'Linux', 'OS'] = 'Other'
     d.loc[d['OS'] == 'Chrome OS', 'OS'] = 'Other'
+    d.loc[d['OS'].isin(['Mac', 'Windows', 'iOS', 'Android']) == False, 'OS'] = 'Other'
     d.drop('context_user_agent', axis=1, inplace=True)
 
     funding = pd.read_sql_query("""
-        SELECT ev.data__object__metadata__quark_user_id :: INT AS user_id,
+        SELECT ev.data__object__metadata__quark_user_id :: BIGINT AS user_id,
             cc.funding
         FROM stitch_stripe.stripe_customers__cards__data cc
                 JOIN stitch_stripe.stripe_events ev ON cc.customer = ev.data__object__customer
-        WHERE ev.data__object__metadata__quark_user_id IS NOT NULL;
-    """, stitch)
+        WHERE ev.data__object__metadata__quark_user_id :: BIGINT IN {users}
+    """.format(users=users_list), stitch)
 
     d = pd.merge(d, funding, how='left')
     d = d.loc[d['funding'] != 'unknown', :]
@@ -429,9 +466,8 @@ df = d.loc[:, [
     'smocapi_35', 'grapi_15', 'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35',
     'num_kids', 'num_girls', 'days_to_convert', 'unemploym_rate_civil',
     'married_couples_density', 'n_preferences', 'cc_type', 'diff_addresses',
-    'days_to_exp', 'note_length', 'is_fraud'
+    'days_to_exp', 'note_length', 'channel', 'is_fraud'
 ]]
-
 imp = Imputer(strategy='median', axis=0, missing_values='NaN')
 
 for col in df[[
@@ -449,7 +485,6 @@ tr_id, ts_id = train_test_split(
 train = df.loc[df['user_id'].isin(tr_id),]
 test = df.loc[df['user_id'].isin(ts_id),]
 
-# train, test = train_test_split(df, test_size=0.2, random_state=2)
 X = train.drop(['user_id', 'is_fraud'], axis=1)
 Y = train['is_fraud']
 x = test.drop(['user_id', 'is_fraud'], axis=1)
