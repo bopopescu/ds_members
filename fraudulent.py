@@ -245,38 +245,6 @@ try:
     print("Found")
 
 except NameError:
-
-    # b = pd.read_sql_query("""
-    #     SELECT b.box_id,
-    #         b.user_id,
-    #         b.kid_profile_id AS kid_id,
-    #         b.state                                                               AS box_state,
-    #         CASE
-    #             WHEN b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed') THEN TRUE
-    #             ELSE FALSE END                                                    AS is_fraud,
-    #         -- u.state                                                               AS user_state,
-    #         service_fee_amount,
-    #         u.service_fee_enabled,
-    #         left(a.zipcode, 5)                                                    AS zipcode,
-    #         became_member_at,
-    #         u.num_boys,
-    #         u.num_girls,
-    #         u.num_kids,
-    #         CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
-    #         ch.channel,
-    #         date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert
-
-    #     FROM dw.fact_boxes b
-    #             JOIN dw.fact_active_users u ON u.user_id = b.user_id
-    #             JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
-    #             LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = b.user_id
-    #     WHERE b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed', 'final')
-    #     AND season_id BETWEEN 7 AND 9
-    #     AND became_member_at >= '2018-01-01'
-    #     AND service_fee_amount = 5
-    #     AND u.email NOT ILIKE '%%@rocketsofawesome.com'
-    # """, stitch)
-
     u = pd.read_sql_query(
         """
         SELECT DISTINCT 
@@ -338,49 +306,6 @@ except NameError:
     mult_u.loc[mult_u['user_id'].isin(frauds), 'is_fraud'] = True
     users = pd.concat([single_u, mult_u], axis=0)
 
-    # d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
-    # d.drop(['zip'], axis=1, inplace=True)
-
-    # kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
-
-    # kps = query_kid_preferences(kids_list)
-
-    # kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
-    # kps['blacklist_count'] = kps.iloc[:, 11:25].notnull().sum(axis=1)
-    # kps['outfit_count'] = kps.iloc[:, 25:54].notnull().sum(axis=1)
-    # kps['style_count'] = kps.iloc[:, 57:66].notnull().sum(axis=1)
-
-    # kps['color_count'] = kps['color_count'].apply(lambda x: 1 if x > 0 else 0)
-    # kps['blacklist_count'] = kps['blacklist_count'].apply(
-    #     lambda x: 1 if x > 0 else 0)
-    # kps['outfit_count'] = kps['outfit_count'].apply(lambda x: 1 if x > 0 else 0)
-    # kps['style_count'] = kps['style_count'].apply(lambda x: 1 if x > 0 else 0)
-    # kps['note_length'] = kps['note'].apply(lambda x: len(x) if x else 0)
-    # kps['swim_count'] = kps['swim'].apply(lambda x: 1 if pd.notnull(x) else 0)
-    # kps['neon_count'] = kps['neon'].apply(lambda x: 1 if pd.notnull(x) else 0)
-    # kps['text_on_clothes_count'] = kps['text_on_clothes'].apply(
-    #     lambda x: 1 if pd.notnull(x) else 0)
-    # kps['backpack_count'] = kps['backpack'].apply(
-    #     lambda x: 1 if pd.notnull(x) else 0)
-    # kps['teams_count'] = kps['teams'].apply(lambda x: 1 if pd.notnull(x) else 0)
-
-    # kps['n_preferences'] = kps.loc[:, [
-    #     'color_count', 'blacklist_count', 'outfit_count', 'style_count',
-    #     'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
-    #     'teams_count'
-    # ]].sum(axis=1)
-
-    # kps.drop([
-    #     'color_count', 'blacklist_count', 'outfit_count', 'style_count',
-    #     'swim_count', 'neon_count', 'text_on_clothes_count', 'backpack_count',
-    #     'teams_count'
-    # ],
-    #          axis=1,
-    #          inplace=True)
-
-    # d = pd.merge(
-    #     d, kps.loc[:, ['kid_id', 'note_length', 'n_preferences']], how='left')
-
     users_list = '(' + ', '.join([str(x) for x in users['user_id'].unique()
                                  ]) + ')'
 
@@ -427,18 +352,6 @@ df = d.loc[:, [
     'unemploym_rate_civil', 'married_couples_density', 'cc_type',
     'diff_addresses', 'months_to_exp', 'channel', 'is_fraud'
 ]]
-
-# imp = Imputer(strategy='median', axis=0, missing_values='NaN')
-
-# for col in df[[
-#         'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
-#         'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
-#         'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids',
-#         'days_to_convert', 'unemploym_rate_civil', 'married_couples_density'
-# ]].columns:
-#     df[col] = imp.fit_transform((df[[col]]))
-
-# df.dropna(inplace=True)
 
 tr_id, ts_id = train_test_split(
     df['user_id'].unique(), test_size=0.2, random_state=3)
