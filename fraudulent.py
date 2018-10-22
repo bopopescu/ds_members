@@ -27,6 +27,7 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import learning_curve
 
 from sklearn.svm import SVC
+from xgboost import XGBClassifier
 
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import cross_val_predict
@@ -39,6 +40,7 @@ from rfpimp import plot_importances
 from rfpimp import plot_corr_heatmap
 
 sns.set_style('whitegrid')
+pd.set_option('display.max_columns', 500)
 
 stitch = create_engine(
     'postgresql://',
@@ -57,6 +59,9 @@ parser.add_argument(
     '--upsample',
     help='train on a minority upsampled set',
     action='store_true')
+parser.add_argument(
+    '-p', '--poly', help='polynomial features', action='store_true')
+parser.add_argument('-x', '--xgb', help='train xgb', action='store_true')
 parser.add_argument(
     '-m',
     '--importances',
@@ -142,8 +147,8 @@ def cat_encode(X, x):
     xenc = enc.transform(xcopy)
 
     if args.dumpfile:
-        joblib.dump(encoders, 'lab_encs.pkl')
-        joblib.dump(enc, 'oh_enc.pkl')
+        joblib.dump(encoders, 'lab_encs_xgb.pkl')
+        joblib.dump(enc, 'oh_enc_xgb.pkl')
 
     return Xenc, xenc
 
@@ -241,38 +246,39 @@ try:
 
 except NameError:
 
-    b = pd.read_sql_query("""
-        SELECT b.box_id,
-            b.user_id,
-            b.kid_profile_id AS kid_id,
-            b.state                                                               AS box_state,
-            CASE
-                WHEN b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed') THEN TRUE
-                ELSE FALSE END                                                    AS is_fraud,
-            -- u.state                                                               AS user_state,
-            service_fee_amount,
-            u.service_fee_enabled,
-            left(a.zipcode, 5)                                                    AS zipcode,
-            became_member_at,
-            u.num_boys,
-            u.num_girls,
-            u.num_kids,
-            CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
-            ch.channel,
-            date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert
+    # b = pd.read_sql_query("""
+    #     SELECT b.box_id,
+    #         b.user_id,
+    #         b.kid_profile_id AS kid_id,
+    #         b.state                                                               AS box_state,
+    #         CASE
+    #             WHEN b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed') THEN TRUE
+    #             ELSE FALSE END                                                    AS is_fraud,
+    #         -- u.state                                                               AS user_state,
+    #         service_fee_amount,
+    #         u.service_fee_enabled,
+    #         left(a.zipcode, 5)                                                    AS zipcode,
+    #         became_member_at,
+    #         u.num_boys,
+    #         u.num_girls,
+    #         u.num_kids,
+    #         CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
+    #         ch.channel,
+    #         date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert
 
-        FROM dw.fact_boxes b
-                JOIN dw.fact_active_users u ON u.user_id = b.user_id
-                JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
-                LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = b.user_id
-        WHERE b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed', 'final')
-        AND season_id BETWEEN 7 AND 9
-        AND became_member_at >= '2018-01-01'
-        AND service_fee_amount = 5
-        AND u.email NOT ILIKE '%%@rocketsofawesome.com'
-    """, stitch)
+    #     FROM dw.fact_boxes b
+    #             JOIN dw.fact_active_users u ON u.user_id = b.user_id
+    #             JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
+    #             LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = b.user_id
+    #     WHERE b.state IN ('payment_failed', 'uncollected', 'lost', 'auth_failed', 'final')
+    #     AND season_id BETWEEN 7 AND 9
+    #     AND became_member_at >= '2018-01-01'
+    #     AND service_fee_amount = 5
+    #     AND u.email NOT ILIKE '%%@rocketsofawesome.com'
+    # """, stitch)
 
-    u = pd.read_sql_query("""
+    u = pd.read_sql_query(
+        """
         SELECT DISTINCT 
             bc.user_id,
             bc.state,
@@ -311,26 +317,26 @@ except NameError:
                 JOIN dw.dim_census c ON left(a.zipcode, 5) = c.zip
         WHERE season_id BETWEEN 7 AND 9
             AND user_box_rank = 1
-            AND bc.state NOT IN ('needs_review', 'new', 'shipped', 'needs_review', 'canceled', 'skipped')
+            AND bc.state NOT IN ('new', 'shipped', 'needs_review', 'canceled', 'skipped')
             AND u.email NOT ILIKE '%%@rocketsofawesome.com'
     """, stitch)
 
     # Cleanup of multiple entries
-    u_counts = u.groupby('user_id')['user_id'].count().sort_values(ascending=False)
-    idx = u_counts[u_counts==2].index
-    mult_u = u.loc[u['user_id'].isin(idx), ]
-    single_u = u.loc[u['user_id'].isin(idx) == False, ]
+    u_counts = u.groupby('user_id')['user_id'].count().sort_values(
+        ascending=False)
+    idx = u_counts[u_counts == 2].index
+    mult_u = u.loc[u['user_id'].isin(idx),]
+    single_u = u.loc[u['user_id'].isin(idx) == False,]
     single_u.drop('state', axis=1, inplace=True)
 
     fraud_or_not = mult_u.groupby('user_id')['is_fraud'].sum()
-    frauds = fraud_or_not[fraud_or_not>0].index
-    not_frauds = fraud_or_not[fraud_or_not==0].index
+    frauds = fraud_or_not[fraud_or_not > 0].index
+    not_frauds = fraud_or_not[fraud_or_not == 0].index
     mult_u.drop(['state', 'is_fraud'], axis=1, inplace=True)
     mult_u.drop_duplicates(inplace=True)
     mult_u['is_fraud'] = False
     mult_u.loc[mult_u['user_id'].isin(frauds), 'is_fraud'] = True
     users = pd.concat([single_u, mult_u], axis=0)
-
 
     # d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
     # d.drop(['zip'], axis=1, inplace=True)
@@ -375,53 +381,27 @@ except NameError:
     # d = pd.merge(
     #     d, kps.loc[:, ['kid_id', 'note_length', 'n_preferences']], how='left')
 
-    users_list = '(' + ', '.join([str(x) for x in users['user_id'].unique()]) + ')'
+    users_list = '(' + ', '.join([str(x) for x in users['user_id'].unique()
+                                 ]) + ')'
 
-    # cc = pd.read_sql_query(
-    #     """
-    #     SELECT user_id :: BIGINT,
-    #         cc_type,
-    #         (make_date(cast(year as int), cast(month as int), 1) 
-    #             + interval '1 month' - interval '1 day') :: DATE AS exp_date
-    #     FROM stitch_quark.spree_credit_cards
-    #     WHERE "default" = TRUE
-    #         AND user_id :: BIGINT IN {users}
-    # """.format(users=users_list), stitch)
-
-    cc = pd.read_sql_query("""
+    cc = pd.read_sql_query(
+        """
         SELECT u.user_id,
-            u.became_member_at,
-            cc_type,
-            (make_date(cast(year AS int), cast(month AS int), 1)
-                    + INTERVAL '1 month' - INTERVAL '1 day') :: DATE AS exp_date,
+            cc.cc_type,
             ((make_date(cast(year AS int), cast(month AS int), 1)
-                                        + INTERVAL '1 month' - INTERVAL '1 day') :: DATE - u.became_member_at :: date) / 30
+                    + INTERVAL '1 month' - INTERVAL '1 day') :: DATE - u.became_member_at :: date) / 30 AS months_to_exp,
+            ccd.funding
         FROM stitch_quark.spree_credit_cards cc
                 JOIN dw.fact_active_users u ON cc.user_id :: BIGINT = u.user_id
+                join stitch_stripe.stripe_customers__cards__data ccd on cc.gateway_customer_profile_id = ccd.customer
         WHERE "default" = TRUE
-            AND user_id :: BIGINT IN {users}
+        AND cc.user_id :: BIGINT IN {users}
     """.format(users=users_list), stitch)
-
-
-
 
     d = pd.merge(users, cc)
 
-    # d = pd.merge(d, cc, how='left')
-    # d['days_to_exp'] = (
-    #     pd.to_datetime(d['exp_date']).dt.tz_localize('UTC') - d['became_member_at']).dt.days
-
-    # uas = pd.read_sql_query(
-    #     """
-    #     SELECT id :: int as user_id,
-    #         context_user_agent
-    #     FROM javascript.users
-    #     WHERE id ~ '^\d+$'
-    #         AND context_user_agent IS NOT NULL
-    #         AND CAST(id AS INT) in {users};
-    # """.format(users=users_list), segment)
-
-    uas = pd.read_sql_query("""
+    uas = pd.read_sql_query(
+        """
         SELECT user_id,
             context_user_agent
         FROM dw.fact_first_click_first_pass
@@ -429,56 +409,36 @@ except NameError:
     """.format(users=users_list), stitch)
 
     d = pd.merge(d, uas, how='left')
+
+    d.dropna(inplace=True)
+
     d['OS'] = d['context_user_agent'].apply(
         lambda x: up.ParseOS(x)['family'] if pd.notnull(x) else None)
     d.loc[d['OS'] == 'Mac OS X', 'OS'] = 'Mac'
-    d.loc[d['OS'] == 'Linux', 'OS'] = 'Other'
-    d.loc[d['OS'] == 'Chrome OS', 'OS'] = 'Other'
-    d.loc[d['OS'].isin(['Mac', 'Windows', 'iOS', 'Android']) == False, 'OS'] = 'Other'
+    d.loc[d['OS'].isin(['Mac', 'Windows', 'iOS', 'Android']) ==
+          False, 'OS'] = 'Other'
     d.drop('context_user_agent', axis=1, inplace=True)
 
-    funding = pd.read_sql_query("""
-        SELECT ev.data__object__metadata__quark_user_id :: BIGINT AS user_id,
-            cc.funding
-        FROM stitch_stripe.stripe_customers__cards__data cc
-                JOIN stitch_stripe.stripe_events ev ON cc.customer = ev.data__object__customer
-        WHERE ev.data__object__metadata__quark_user_id :: BIGINT IN {users}
-    """.format(users=users_list), stitch)
-
-    d = pd.merge(d, funding, how='left')
-    d = d.loc[d['funding'] != 'unknown', :]
-
-    # decls = pd.read_sql_query(
-    # """
-    #     SELECT count(*) as declines,
-    #         data__object__metadata__quark_user_id :: int as user_id
-    #     FROM stitch_stripe.stripe_events
-    #     WHERE data__object__metadata__quark_user_id IS NOT NULL
-    #         AND type = 'charge.failed'
-    #     GROUP BY 2;
-    # """, stitch)
-
-    # d = pd.merge(d, decls, how='left')
-
 df = d.loc[:, [
-    'user_id', 'funding', 'OS', 'med_hh_income', 'kids_school_perc',
-    'kids_priv_school_perc', 'smocapi_20', 'smocapi_25', 'smocapi_30',
-    'smocapi_35', 'grapi_15', 'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35',
-    'num_kids', 'num_girls', 'days_to_convert', 'unemploym_rate_civil',
-    'married_couples_density', 'n_preferences', 'cc_type', 'diff_addresses',
-    'days_to_exp', 'note_length', 'channel', 'is_fraud'
+    'user_id', 'funding', 'OS', 'service_fee_enabled', 'med_hh_income',
+    'kids_school_perc', 'kids_priv_school_perc', 'smocapi_20', 'smocapi_25',
+    'smocapi_30', 'smocapi_35', 'grapi_15', 'grapi_20', 'grapi_25', 'grapi_30',
+    'grapi_35', 'num_kids', 'num_girls', 'days_to_convert',
+    'unemploym_rate_civil', 'married_couples_density', 'cc_type',
+    'diff_addresses', 'months_to_exp', 'channel', 'is_fraud'
 ]]
-imp = Imputer(strategy='median', axis=0, missing_values='NaN')
 
-for col in df[[
-        'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
-        'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
-        'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids',
-        'days_to_convert', 'unemploym_rate_civil', 'married_couples_density'
-]].columns:
-    df[col] = imp.fit_transform((df[[col]]))
+# imp = Imputer(strategy='median', axis=0, missing_values='NaN')
 
-df.dropna(inplace=True)
+# for col in df[[
+#         'med_hh_income', 'kids_school_perc', 'kids_priv_school_perc',
+#         'smocapi_20', 'smocapi_25', 'smocapi_30', 'smocapi_35', 'grapi_15',
+#         'grapi_20', 'grapi_25', 'grapi_30', 'grapi_35', 'num_kids',
+#         'days_to_convert', 'unemploym_rate_civil', 'married_couples_density'
+# ]].columns:
+#     df[col] = imp.fit_transform((df[[col]]))
+
+# df.dropna(inplace=True)
 
 tr_id, ts_id = train_test_split(
     df['user_id'].unique(), test_size=0.2, random_state=3)
@@ -490,14 +450,15 @@ Y = train['is_fraud']
 x = test.drop(['user_id', 'is_fraud'], axis=1)
 y = test['is_fraud']
 
-rf = RandomForestClassifier(n_jobs=-1)
 Xenc, xenc = cat_encode(X, x)
 
-poly = PolynomialFeatures(2)
-Xenc = poly.fit_transform(Xenc)
-xenc = poly.transform(xenc)
+if args.poly:
+    poly = PolynomialFeatures(2)
+    Xenc = poly.fit_transform(Xenc)
+    xenc = poly.transform(xenc)
 
 if args.baseline:
+    rf = RandomForestClassifier(n_jobs=-1)
     rf.fit(Xenc, Y)
     preds = rf.predict(Xenc)
     probs = rf.predict_proba(Xenc)
@@ -526,9 +487,46 @@ if args.baseline:
     skplt.metrics.plot_calibration_curve(y, [test_probs], clf_names)
     plot_learning_curve(rf, "Random Forest", Xenc, Y)
 
+
+if args.xgb:
+    xgb = XGBClassifier(n_jobs=2, scale_pos_weight=(Y.shape[0] - Y.sum())/Y.sum())
+    xgb.fit(Xenc, Y)
+    preds = xgb.predict(Xenc)
+    probs = xgb.predict_proba(Xenc)
+    print('train accuracy score: {0:2f}'.format(accuracy_score(Y, preds)))
+
+    cv_preds = cross_val_predict(xgb, Xenc, Y, cv=5)
+    print('train cv accuracy score: {0:2f}'.format(accuracy_score(Y, cv_preds)))
+    # Keep only the positive class
+    probs = [p[1] for p in probs]
+    print('train roc score: {0:2f}'.format(roc_auc_score(Y, probs)))
+
+    test_preds = xgb.predict(xenc)
+    test_probs = xgb.predict_proba(xenc)
+    print('test accuracy score: {0:2f}'.format(accuracy_score(y, test_preds)))
+
+    test_probs_1 = [p[1] for p in test_probs]
+    print('test roc score: {0:2f}'.format(roc_auc_score(y, test_probs_1)))
+
+    # predictions = cross_val_predict(xgb, x, y)
+
+    skplt.metrics.plot_confusion_matrix(y, test_preds, normalize=True)
+    skplt.metrics.plot_confusion_matrix(y, test_preds, normalize=False)
+    skplt.metrics.plot_precision_recall(y, test_probs)
+    skplt.metrics.plot_roc(y, test_probs)
+    clf_names = ['XGB']
+    skplt.metrics.plot_calibration_curve(y, [test_probs], clf_names)
+    plot_learning_curve(xgb, "XGB", Xenc, Y)
+
+
 if args.dumpfile:
-    joblib.dump(rf, "rf.pkl")
-    joblib.dump(poly, 'poly.pkl')
+    if args.baseline:
+        joblib.dump(rf, "rf.pkl")
+    if args.xgb:
+        joblib.dump(xgb, 'xgb.pkl')
+    if args.poly:
+        joblib.dump(poly, 'poly.pkl')
+
 
 if args.svm:
     svm = SVC(
@@ -557,6 +555,7 @@ if args.svm:
     plot_learning_curve(svm, "SVM", Xenc, Y)
 
 if args.importances:
+    rf = RandomForestClassifier(n_jobs=-1)
     Xnum = X.drop(['cc_type', 'diff_addresses'], axis=1)
     xnum = x.drop(['cc_type', 'diff_addresses'], axis=1)
     Xpoly = poly.fit_transform(Xnum)
