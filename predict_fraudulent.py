@@ -56,7 +56,7 @@ b = pd.read_sql_query(
     SELECT box_id,
         b.user_id,
         b.shipping_window_id,
-        kid_profile_id                                                 AS kid_id,
+        kid_profile_id,
         b.state                                                        AS box_state,
         u.state                                                        AS user_state,
         b.service_fee_amount,
@@ -118,13 +118,13 @@ c = pd.read_sql(
 d = pd.merge(b, c, how='left', left_on='zipcode', right_on='zip')
 d.drop(['zip'], axis=1, inplace=True)
 
-kids_list = '(' + ', '.join([str(x) for x in b['kid_id'].unique()]) + ')'
+kids_list = '(' + ', '.join([str(x) for x in b['kid_profile_id'].unique()]) + ')'
 
 kps = pd.read_sql_query(
     """
     SELECT *
     FROM dw.dim_kid_preferences
-    WHERE kid_id IN {kids_list};
+    WHERE kid_profile_id IN {kids_list};
 """.format(kids_list=kids_list), stitch)
 
 kps['color_count'] = kps.iloc[:, 1:11].notnull().sum(axis=1)
@@ -161,7 +161,7 @@ kps.drop([
          inplace=True)
 
 d = pd.merge(
-    d, kps.loc[:, ['kid_id', 'note_length', 'n_preferences']], how='left')
+    d, kps.loc[:, ['kid_profile_id', 'note_length', 'n_preferences']], how='left')
 
 users_list = '(' + ', '.join([str(x) for x in b['user_id'].unique()]) + ')'
 
