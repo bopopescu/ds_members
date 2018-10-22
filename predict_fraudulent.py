@@ -121,7 +121,8 @@ u = pd.read_sql_query(
                         grapi_25,
                         grapi_30,
                         grapi_35,
-                        grapi_high
+                        grapi_high,
+                        left(u.zipcode, 5)                                             AS zipcode
         FROM dw.fact_user_box_count bc
                 LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = bc.user_id
                 JOIN dw.fact_active_users u ON bc.user_id = u.user_id
