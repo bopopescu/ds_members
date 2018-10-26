@@ -160,7 +160,9 @@ def plot_learning_curve(estimator,
                         ylim=None,
                         cv=None,
                         n_jobs=1,
-                        train_sizes=np.linspace(.1, 1.0, 5)):
+                        train_sizes=np.linspace(.5, 1., 5),
+                        # train_sizes=np.linspace(.1, 1.0, 5),
+                        scoring=None):
     """
     Generate a simple plot of the test and training learning curve.
 
@@ -208,7 +210,7 @@ def plot_learning_curve(estimator,
     plt.xlabel("Training examples")
     plt.ylabel("Score")
     train_sizes, train_scores, test_scores = learning_curve(
-        estimator, X, y, cv=cv, n_jobs=n_jobs, train_sizes=train_sizes)
+        estimator, X, y, cv=cv, n_jobs=n_jobs, train_sizes=train_sizes, scoring=scoring)
     train_scores_mean = np.mean(train_scores, axis=1)
     train_scores_std = np.std(train_scores, axis=1)
     test_scores_mean = np.mean(test_scores, axis=1)
@@ -283,7 +285,7 @@ except NameError:
                 JOIN dw.fact_active_users u ON bc.user_id = u.user_id
                 JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
                 JOIN dw.dim_census c ON left(a.zipcode, 5) = c.zip
-        WHERE season_id BETWEEN 7 AND 9
+        WHERE season_id BETWEEN 6 AND 9
             AND user_box_rank = 1
             AND bc.state NOT IN ('new', 'shipped', 'needs_review', 'canceled', 'skipped')
             AND u.email NOT ILIKE '%%@rocketsofawesome.com'
@@ -429,7 +431,7 @@ if args.xgb:
     skplt.metrics.plot_roc(y, test_probs)
     clf_names = ['XGB']
     skplt.metrics.plot_calibration_curve(y, [test_probs], clf_names)
-    plot_learning_curve(xgb, "XGB", Xenc, Y)
+    plot_learning_curve(xgb, "XGB", Xenc, Y, n_jobs=2, scoring='roc_auc')
 
 
 if args.dumpfile:
