@@ -7,6 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from df2gspread import gspread2df as g2d
 from df2gspread import df2gspread as d2g
 import yaml
+from datetime import datetime
 
 from sklearn.preprocessing import Imputer
 from sklearn.ensemble import RandomForestClassifier
@@ -232,6 +233,21 @@ n = pd.concat([t, risky], sort=False)
 n = n.reset_index().drop('index', axis=1)
 n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
+
+u = '(' + ', '.join([str(x) for x in set(n['user_id'])]) + ')'
+
+w = pd.read_sql_query(
+"""
+    SELECT *
+    FROM stitch_quark.whitelisted_users
+    WHERE user_id IN {users}
+""".format(users=u), stitch)
+
+whitelist_users = set(w['user_id'])
+
+cleanup_date = datetime(2018, 10, 25, 20)
+n = n.loc[(n['created_at'] < cleanup_date) |
+          ((n['user_id'].isin(whitelist_users) == False) & (n['created_at'] > cleanup_date)), ]
 
 if n.shape[0] > t.shape[0] and args.local == False:
     n.to_sql("pred_risky", stitch, schema='dw', if_exists='append', index=False)
