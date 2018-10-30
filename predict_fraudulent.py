@@ -93,7 +93,8 @@ u = pd.read_sql_query(
                 JOIN dw.fact_boxes b ON bc.box_id = b.box_id
         WHERE bc.season_id = 10
         AND user_box_rank = 1
-        AND bc.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final')
+        AND bc.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final',
+            'payment_failed', 'uncollected', 'lost')
         AND (b.shipping_window_id IN (SELECT current_shipping_window_id FROM dw.dim_shipping_windows WHERE current_window
                                         UNION (SELECT next_shipping_window_id
                                             FROM dw.dim_shipping_windows
