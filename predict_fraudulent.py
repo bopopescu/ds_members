@@ -158,7 +158,7 @@ probs = xgb.predict_proba(xenc)
 d['probs'] = [p[1] for p in probs]
 d.sort_values(by='probs', ascending=False, inplace=True)
 
-risky = d.loc[d['probs'] >= 0.4, [
+risky = d.loc[d['probs'] >= 0.5, [
     'user_id',
     'num_kids',
     'zipcode',
