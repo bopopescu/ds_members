@@ -54,95 +54,65 @@ else:
         echo_pool=True,
         creator=lambda _: conn)
 
-u = pd.read_sql_query(
-    """
-        SELECT DISTINCT bc.user_id,
-                        bc.state,
-                        ch.channel,
-                        u.num_boys,
-                        u.num_girls,
-                        u.num_kids,
-                        u.service_fee_enabled,
-                        CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END AS diff_addresses,
-                        date_part('days', u.became_member_at - u.created_at)                  AS days_to_convert,
-                        unemploym_rate_civil,
-                        med_hh_income,
-                        married_couples_density,
-                        females_density,
-                        n_kids / area                                                         AS kids_density,
-                        households_density,
-                        kids_school_perc,
-                        kids_priv_school_perc,
-                        smocapi_20,
-                        smocapi_25,
-                        smocapi_30,
-                        smocapi_35,
-                        smocapi_high,
-                        grapi_15,
-                        grapi_20,
-                        grapi_25,
-                        grapi_30,
-                        grapi_35,
-                        grapi_high,
-                        left(u.zipcode, 5)                                             AS zipcode
-        FROM dw.fact_user_box_count bc
-                LEFT JOIN dw.fact_channel_attribution ch ON ch.user_id = bc.user_id
-                JOIN dw.fact_active_users u ON bc.user_id = u.user_id
-                JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
-                JOIN dw.dim_census c ON left(a.zipcode, 5) = c.zip
-                JOIN dw.fact_boxes b ON bc.box_id = b.box_id
-        WHERE bc.season_id = 10
-        AND user_box_rank = 1
-        AND bc.state NOT IN ('new_invalid', 'canceled', 'delivered', 'shipped', 'in_fulfillment', 'skipped', 'final',
-            'payment_failed', 'uncollected', 'lost')
-        AND (b.shipping_window_id IN (SELECT current_shipping_window_id FROM dw.dim_shipping_windows WHERE current_window
-                                        UNION (SELECT next_shipping_window_id
-                                            FROM dw.dim_shipping_windows
-                                            WHERE current_window)) OR b.shipping_window_id IS NULL)
-        AND u.email NOT ILIKE '%%@rocketsofawesome.com';
+d = pd.read_sql_query("""
+    SELECT DISTINCT u.user_id,
+                    ch.channel,
+                    u.num_boys,
+                    u.num_girls,
+                    u.num_kids,
+                    u.service_fee_enabled,
+                    CASE WHEN ship_address_id != bill_address_id THEN TRUE ELSE FALSE END                     AS diff_addresses,
+                    date_part('days', u.became_member_at - u.created_at)                                      AS days_to_convert,
+                    unemploym_rate_civil,
+                    med_hh_income,
+                    married_couples_density,
+                    females_density,
+                    n_kids / area                                                                             AS kids_density,
+                    households_density,
+                    kids_school_perc,
+                    kids_priv_school_perc,
+                    smocapi_20,
+                    smocapi_25,
+                    smocapi_30,
+                    smocapi_35,
+                    smocapi_high,
+                    grapi_15,
+                    grapi_20,
+                    grapi_25,
+                    grapi_30,
+                    grapi_35,
+                    grapi_high,
+                    left(u.zipcode, 5)                                                                        AS zipcode,
+                    cc.cc_type,
+                    ((make_date(cast(year AS int), cast(month AS int), 1)
+                        + INTERVAL '1 month' - INTERVAL '1 day') :: DATE - u.became_member_at :: date) /
+                    30                                                                                        AS months_to_exp,
+                    ccd.funding,
+                    cl.context_user_agent
+
+    FROM dw.fact_active_users u
+            LEFT JOIN dw.fact_boxes b ON b.user_id = u.user_id
+            JOIN dw.fact_channel_attribution ch ON ch.user_id = b.user_id
+            JOIN stitch_quark.spree_addresses a ON u.ship_address_id = a.id
+            JOIN dw.dim_census c ON left(a.zipcode, 5) = c.zip
+            JOIN stitch_quark.spree_credit_cards cc ON cc.user_id :: BIGINT = u.user_id
+            JOIN stitch_stripe.stripe_customers__cards__data ccd ON cc.gateway_customer_profile_id = ccd.customer
+            LEFT JOIN dw.fact_first_click_first_pass cl ON cl.user_id = u.user_id
+
+    WHERE b.season_id = 10
+    AND b.state NOT IN ('new_invalid',
+                        'canceled',
+                        'delivered',
+                        'shipped',
+                        'in_fulfillment',
+                        'skipped',
+                        'final',
+                        'payment_failed',
+                        'uncollected',
+                        'lost')
+    AND u.created_at >= current_date - 7
+    AND u.email NOT ILIKE '%%@rocketsofawesome.com';
 """, stitch)
-
-
-# Cleanup of multiple entries
-u_counts = u.groupby('user_id')['user_id'].count().sort_values(
-    ascending=False)
-idx = u_counts[u_counts == 2].index
-mult_u = u.loc[u['user_id'].isin(idx),]
-single_u = u.loc[u['user_id'].isin(idx) == False,]
-single_u.drop('state', axis=1, inplace=True)
-
-mult_u.drop(['state'], axis=1, inplace=True)
-mult_u.drop_duplicates(inplace=True)
-users = pd.concat([single_u, mult_u], axis=0)
-
-users_list = '(' + ', '.join([str(x) for x in users['user_id'].unique()
-                                ]) + ')'
-
-cc = pd.read_sql_query(
-    """
-    SELECT u.user_id,
-        cc.cc_type,
-        ((make_date(cast(year AS int), cast(month AS int), 1)
-                + INTERVAL '1 month' - INTERVAL '1 day') :: DATE - u.became_member_at :: date) / 30 AS months_to_exp,
-        ccd.funding
-    FROM stitch_quark.spree_credit_cards cc
-            JOIN dw.fact_active_users u ON cc.user_id :: BIGINT = u.user_id
-            join stitch_stripe.stripe_customers__cards__data ccd on cc.gateway_customer_profile_id = ccd.customer
-    WHERE "default" = TRUE
-    AND cc.user_id :: BIGINT IN {users}
-""".format(users=users_list), stitch)
-
-d = pd.merge(users, cc)
-
-uas = pd.read_sql_query(
-    """
-    SELECT user_id,
-        context_user_agent
-    FROM dw.fact_first_click_first_pass
-    WHERE user_id in {users}
-""".format(users=users_list), stitch)
-
-d = pd.merge(d, uas, how='left')
 
 d.dropna(inplace=True)
 
