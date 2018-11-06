@@ -99,7 +99,7 @@ d = pd.read_sql_query("""
             JOIN stitch_stripe.stripe_customers__cards__data ccd ON cc.gateway_customer_profile_id = ccd.customer
             LEFT JOIN dw.fact_first_click_first_pass cl ON cl.user_id = u.user_id
 
-    WHERE b.season_id = 10
+    WHERE b.season_id = (SELECT max(season_id) FROM dw.dim_seasons)
     AND b.state NOT IN ('new_invalid',
                         'canceled',
                         'delivered',
@@ -200,12 +200,25 @@ t['created_at'] = pd.to_datetime(t['created_at'])
 
 risky = risky.loc[(risky['user_id'].isin(set(t['user_id'].unique()))) == False,]
 
+risky_users = '(' + ', '.join(str(x) for x in set(risky['user_id'])) + ')'
+
+s = pd.read_sql_query("""
+    SELECT jsonb_agg(state) AS box_states, user_id
+    from dw.fact_boxes
+    where user_id IN {users}
+        AND season_id = (SELECT max(season_id) FROM dw.dim_seasons)
+    group by 2
+""".format(users=risky_users), stitch)
+
+risky = pd.merge(risky, s, how='left')
+
 n = pd.concat([t, risky], sort=False)
 n = n.reset_index().drop('index', axis=1)
 n['Notes'].fillna('', inplace=True)
 n['Notes'].replace('None', '', inplace=True)
 
 u = '(' + ', '.join([str(x) for x in set(n['user_id'])]) + ')'
+
 
 w = pd.read_sql_query(
 """
@@ -219,6 +232,8 @@ whitelist_users = set(w['user_id'])
 cleanup_date = datetime(2018, 10, 25, 20)
 n = n.loc[(n['created_at'] < cleanup_date) |
           ((n['user_id'].isin(whitelist_users) == False) & (n['created_at'] > cleanup_date)), ]
+
+# n = pd.merge(n, s, how='left')
 
 if n.shape[0] > t.shape[0] and args.local == False:
     n.to_sql("pred_risky", stitch, schema='dw', if_exists='append', index=False)
