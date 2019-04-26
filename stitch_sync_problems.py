@@ -91,3 +91,7 @@ d['count_redshift'] = d['count_redshift'].astype('int')
 d['count_slave'] = d['count_slave'].astype('int')
 
 d['delta_values'] = d['count_redshift'] - d['count_slave']
+
+
+d.to_sql(
+    'check_boxes', con=redshift, schema='qa', if_exists='append', index=False)
