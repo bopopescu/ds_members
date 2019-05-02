@@ -22,6 +22,9 @@ daily = pd.read_sql_query(
     WHERE datafields__createdat > '2019-04-01'
 """, redshift)
 
+daily.rename(columns={'message_id': '__sdc_primary_key'}, inplace=True)
+daily.drop('time_delta', axis=1, inplace=True)
+
 daily.to_sql(
     'test_email_conversion',
     con=redshift,
