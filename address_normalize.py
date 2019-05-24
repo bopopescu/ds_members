@@ -5,6 +5,8 @@ import pandas as pd
 import psycopg2
 from sqlalchemy import create_engine
 from fuzzywuzzy import process as fwp
+from fuzzywuzzy import fuzz
+import time
 
 
 redshift = create_engine(
@@ -83,7 +85,7 @@ class address(object):
 
 
 
-def fmatch(test_address, choices):
+def fmatch(test_address, choices, minscore=90):
     """Loose fuzzy address matching, where loose is defined as minimum score=90.
     
     Arguments:
@@ -94,11 +96,31 @@ def fmatch(test_address, choices):
         str -- index of the matched address
 
     """
-    minscore = 50
     choice, score = fwp.extractOne(test_address, choices)
 
     return choice if score > minscore else None
     # return choices.index(choice) if score > minscore else None
+
+
+def cleanup_mult_orders(data):
+    """Pick the first row for orders with multiple direct mails.
+    
+    Arguments:
+        data {dataframe} -- all the matched direct mails
+    
+    Returns:
+        dataframe -- a cleaned up version of the dataframe
+
+    """
+    singles = data.groupby('order_id').filter(lambda g: len(g) == 1)
+    multiples = data.groupby('order_id').filter(lambda g: len(g) > 1)
+
+    cleaned_up = []
+    cleaned_up.append(singles)
+    for group in multiples.groupby('order_id'):
+        cleaned_up.append(group[1].iloc[0,].to_frame().transpose())
+
+    return pd.concat(cleaned_up)
 
 
 if __name__ == '__main__':
@@ -106,12 +128,19 @@ if __name__ == '__main__':
         SELECT phase,
             test_cell,
             mailing_date,
-            address_2 || ' ' || city || ' ' || state || ' ' || left(zipcode, 5) AS full_address
+            left(zipcode, 5) AS zipcode,
+            city,
+            state,
+            address_2 || ' ' || city AS full_address,
+            firstname,
+            lastname
         FROM dw.fact_direct_mail_addresses
         WHERE phase = 6
+            AND test_cell = 1
     """, redshift)
 
     fdma6['norm_address'] = fdma6['full_address'].apply(address.apply_norm)
+    fdma6['short_address'] = fdma6['norm_address'].str[:11].str.cat(fdma6['zipcode'])
 
     so = pd.read_sql_query(
         """
@@ -121,7 +150,11 @@ if __name__ == '__main__':
             flso.bill_address1,
             flso.bill_city,
             flso.bill_zipcode,
-            flso.bill_address1 || ' ' || flso.bill_city || ' ' || flso.bill_zipcode AS order_address
+            flso.bill_address1 || ' ' || flso.bill_city AS order_address,
+            flso.ship_firstname,
+            flso.ship_lastname,
+            flso.bill_firstname,
+            flso.bill_lastname
         FROM dw.fact_latest_state_orders flso
         LEFT JOIN dw.fact_order_marketing_promotions fomp
             ON fomp.order_id = flso.id
@@ -132,9 +165,23 @@ if __name__ == '__main__':
     """, redshift)
 
     so['norm_address'] = so['order_address'].apply(address.apply_norm)
+    so['short_address'] = so['norm_address'].str[:11].str.cat(so['bill_zipcode'])
 
-    choices = so['norm_address'].tolist()
-    short_choices = [c[:10] for c in choices]
+    choices = so['short_address'].tolist()
 
     # this takes way too long. split into zipcode fuzzy match, then address match
-    # fdma6['match_str'] = fdma6['norm_address'].str[:10].apply(fmatch, args=(short_choices,))
+    start_time = time.time()
+    fdma6['match_str'] = fdma6['short_address'].apply(fmatch, args=(choices,))
+    delta_t = time.time() - start_time
+    print('matching takes {these} seconds'.format(these=delta_t))
+
+    matchbacks = pd.merge(fdma6, so, how='inner', left_on='match_str', right_on='short_address')
+    matchbacks = matchbacks.loc[:, [
+        'phase', 'test_cell', 'mailing_date', 'zipcode', 'city', 'state',
+        'full_address', 'match_str', 'order_id', 'promotion_code',
+        'completed_at', 'bill_address1', 'bill_city', 'bill_zipcode',
+        'ship_firstname', 'ship_lastname', 'bill_firstname', 'bill_lastname',
+        'firstname', 'lastname'
+    ]]
+
+    df = cleanup_mult_orders(matchbacks)
