@@ -7,6 +7,8 @@ from sqlalchemy import create_engine
 from fuzzywuzzy import process as fwp
 from fuzzywuzzy import fuzz
 import time
+import multiprocessing as mp
+
 
 
 redshift = create_engine(
@@ -136,7 +138,7 @@ if __name__ == '__main__':
             lastname
         FROM dw.fact_direct_mail_addresses
         WHERE phase = 6
-            AND test_cell = 1
+            AND test_cell = 2
     """, redshift)
 
     fdma6['norm_address'] = fdma6['full_address'].apply(address.apply_norm)
@@ -162,21 +164,28 @@ if __name__ == '__main__':
             AND flso.state = 'complete'
             AND flso.completed_at > DATEADD(HOUR, 12, '2019-05-06')
             AND flso.completed_at < DATEADD(WEEK, 10, '2019-05-06')
+            AND bill_address1 IS NOT NULL
     """, redshift)
 
     so['norm_address'] = so['order_address'].apply(address.apply_norm)
     so['short_address'] = so['norm_address'].str[:11].str.cat(so['bill_zipcode'])
 
     choices = so['short_address'].tolist()
+    pool = mp.Pool(mp.cpu_count())
 
     # this takes way too long. split into zipcode fuzzy match, then address match
     start_time = time.time()
     fdma6['match_str'] = fdma6['short_address'].apply(fmatch, args=(choices,))
+    # fdma6['match_str'] = [
+    # results = [
+    #     pool.apply(fmatch, args=(row, choices))
+    #     for row in fdma6['short_address']
+    # ]
     delta_t = time.time() - start_time
     print('matching takes {these} seconds'.format(these=delta_t))
 
-    matchbacks = pd.merge(fdma6, so, how='inner', left_on='match_str', right_on='short_address')
-    matchbacks = matchbacks.loc[:, [
+    matchbacks2 = pd.merge(fdma6, so, how='inner', left_on='match_str', right_on='short_address')
+    matchbacks2 = matchbacks2.loc[:, [
         'phase', 'test_cell', 'mailing_date', 'zipcode', 'city', 'state',
         'full_address', 'match_str', 'order_id', 'promotion_code',
         'completed_at', 'bill_address1', 'bill_city', 'bill_zipcode',
@@ -184,4 +193,4 @@ if __name__ == '__main__':
         'firstname', 'lastname'
     ]]
 
-    df = cleanup_mult_orders(matchbacks)
+    df2 = cleanup_mult_orders(matchbacks2)
