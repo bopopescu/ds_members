@@ -9,6 +9,7 @@ d = pd.read_sql_query("""
             dm.email,
             p.box_id,
             p.timestamp::timestamp                                            AS event_ts,
+            p.items_kept,
             CASE WHEN event_ts IS NULL THEN 0 ELSE 1 END                      AS event_fired,
             json_extract_path_text(d.datafields__transactionaldata, 'box_id') AS iterable_box_id,
             CASE WHEN iterable_box_id IS NULL THEN 0 ELSE 1 END               AS email_sent,
@@ -73,3 +74,17 @@ ns = pd.read_sql_query("""
 """.format(ns=', '.join([str(x) for x in not_sent['user_id'].unique()])), REDSHIFT)
 
 ns.groupby('state')['user_id'].count()
+
+
+unsubs = pd.read_sql_query(
+    """
+    SELECT DISTINCT email, datafields__createdAt
+    FROM stitch_iterable.data d
+    WHERE eventname = 'emailUnSubscribe'
+    and email IN ({uns})
+""".format(uns=', '.join([
+        '\'' + str(x) + '\''
+        for x in ns.loc[ns['state'] == 'subscription_member', 'email'].unique()
+    ])), REDSHIFT)
+
+print(unsubs.shape[0])
