@@ -12,7 +12,7 @@ from query_dbs import user_agents
 
 from ua_parser import user_agent_parser as up
 
-slave = psycopg2.connect(service="rockets-slave")
+subordinate = psycopg2.connect(service="rockets-subordinate")
 segment = psycopg2.connect(service='rockets-segment')
 
 localdb = create_engine(
@@ -21,10 +21,10 @@ localdb = create_engine(
     pool_recycle=300,
     creator=lambda _: psycopg2.connect(service="rockets-local"))
 
-gc = pd.read_sql_query(good_customers, slave)
-kz = pd.read_sql_query(kids_and_zip, slave)
-kr = pd.read_sql_query(avg_keep_rates, slave)
-refs = pd.read_sql_query(referrals, slave)
+gc = pd.read_sql_query(good_customers, subordinate)
+kz = pd.read_sql_query(kids_and_zip, subordinate)
+kr = pd.read_sql_query(avg_keep_rates, subordinate)
+refs = pd.read_sql_query(referrals, subordinate)
 uas = pd.read_sql_query(user_agents, segment)
 census = pd.read_sql("SELECT * FROM members.census", localdb)
 census.drop('index', axis=1, inplace=True)

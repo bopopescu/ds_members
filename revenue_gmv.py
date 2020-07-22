@@ -13,7 +13,7 @@ from plot_utils import binned_df
 
 sns.set_style('whitegrid')
 
-slave = psycopg2.connect(service="rockets-slave")
+subordinate = psycopg2.connect(service="rockets-subordinate")
 
 localdb = create_engine(
     'postgresql://',
@@ -62,7 +62,7 @@ b = pd.read_sql_query(
     AND b.approved_at < (CURRENT_DATE - INTERVAL '2 weeks') :: date
     AND b.approved_at > '2018-01-01'
     GROUP BY 3, 4, 5, 6, 7;
-""", slave)
+""", subordinate)
 b['box_date'] = pd.to_datetime(b['box_date'])
 
 s = pd.read_sql_query(
@@ -90,7 +90,7 @@ WHERE b.state = 'final'  -- otherwise kept is meaningless
   AND b.approved_at < (CURRENT_DATE - INTERVAL '2 weeks') :: date
   AND b.approved_at > '2018-01-01'
 order by b.id;
-""", slave)
+""", subordinate)
 s['box_date'] = pd.to_datetime(s['box_date'])
 
 ka = s.groupby('box_id')['kept'].sum().reset_index().rename(

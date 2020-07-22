@@ -14,12 +14,12 @@ redshift = create_engine(
     echo_pool=True,
     creator=lambda _: psycopg2.connect(service='rockets-redshift'))
 
-slave = create_engine(
+subordinate = create_engine(
     'postgresql://',
     echo=True,
     pool_recycle=300,
     echo_pool=True,
-    creator=lambda _: psycopg2.connect(service='rockets-slave')
+    creator=lambda _: psycopg2.connect(service='rockets-subordinate')
 )
 
 sli_redshift = pd.read_sql_query("""
@@ -42,7 +42,7 @@ sli_db = pd.read_sql_query("""
         TRUE AS db
     FROM spree_line_items sli
     JOIN spree_variants sv ON sli.variant_id = sv.id
-""", slave)
+""", subordinate)
 
 
 d = pd.merge(sli_redshift, sli_db, how='left', on=['order_id', 'quantity', 'variant_id', 'sku'])

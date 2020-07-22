@@ -8,7 +8,7 @@ localdb = create_engine(
     echo=False,
     pool_recycle=300,
     creator=lambda _: psycopg2.connect(service="rockets-local"))
-slave = psycopg2.connect(service="rockets-slave")
+subordinate = psycopg2.connect(service="rockets-subordinate")
 
 q = """
 WITH col_l AS (SELECT p.id, ARRAY(
@@ -158,7 +158,7 @@ FROM kid_profiles p
 	     LEFT JOIN outs ON outs.id = p.id;
 """
 
-k = pd.read_sql_query(q, slave)
+k = pd.read_sql_query(q, subordinate)
 k.to_sql(
     "kid_preferences",
     localdb,

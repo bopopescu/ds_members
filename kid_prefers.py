@@ -31,13 +31,13 @@ localdb = create_engine(
     echo=False,
     pool_recycle=300,
     creator=lambda _: psycopg2.connect(service="rockets-local"))
-slave = psycopg2.connect(service="rockets-slave")
+subordinate = psycopg2.connect(service="rockets-subordinate")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-c",
     '--createDataset',
-    help="query slave and create copy dataset to local db",
+    help="query subordinate and create copy dataset to local db",
     action='store_true')
 
 parser.add_argument(
@@ -133,14 +133,14 @@ def plot_stack(data, xaxis_var, hue='good_kids', title=None, horiz=False):
 if args.createDataset:
 
     with open("./sql/kids.sql", 'r') as q:
-        k = pd.read_sql_query(q.read(), slave)
+        k = pd.read_sql_query(q.read(), subordinate)
 
     # let's throw away those kids with null size preferences
     # s = set(k.loc[(k['top_size'].isnull()) | (k['bottom_size'].isnull()), 'id'])
     # ss = pd.read_sql_query("""
     # SELECT * FROM kid_profiles
     # WHERE id IN ({0})
-    # """.format(', '.join([str(l) for l in s])), slave)
+    # """.format(', '.join([str(l) for l in s])), subordinate)
 
     k = k.loc[(k['top_size'].notnull()) & (k['bottom_size'].notnull()),]
     k['top_size'] = k['top_size'].astype('int')
@@ -152,13 +152,13 @@ if args.createDataset:
             k[col] = k[col].replace('', 'no_preference')
 
     with open("./sql/avg_kr_kid.sql", 'r') as q:
-        akr = pd.read_sql_query(q.read(), slave)
+        akr = pd.read_sql_query(q.read(), subordinate)
 
     with open("./sql/is_good_kid.sql", 'r') as q:
-        gk = pd.read_sql_query(q.read(), slave)
+        gk = pd.read_sql_query(q.read(), subordinate)
 
     with open("./sql/has_siblings.sql", 'r') as q:
-        sk = pd.read_sql_query(q.read(), slave)
+        sk = pd.read_sql_query(q.read(), subordinate)
 
     st = pd.read_sql_query(
         """
@@ -170,7 +170,7 @@ if args.createDataset:
                         u.state AS state
         FROM kid_profiles p
                  INNER JOIN users u ON p.user_id = u.id;
-        """, slave)
+        """, subordinate)
 
     d = pd.merge(akr, gk)
     d = pd.merge(d, k)

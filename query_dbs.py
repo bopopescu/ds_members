@@ -1,7 +1,7 @@
 import pandas as pd
 import psycopg2
 
-slave = psycopg2.connect(service="rockets-slave")
+subordinate = psycopg2.connect(service="rockets-subordinate")
 
 # All kids with a zip code.
 # Even not good customer kids.
@@ -275,6 +275,6 @@ FROM kid_profiles p
 		                                          p.preferences->'style_preferences'->'sample_outfits')) AS outfits
 	                FROM kid_profiles p) outs ON outs.id = p.id
 WHERE p.id IN {kids_list};
-    """.format(kids_list=kids_list), slave)
+    """.format(kids_list=kids_list), subordinate)
 
     return q
